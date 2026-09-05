@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://ai-cleanness.onrender.com',
+        target: 'https://smart-clean-city-backend.onrender.com/',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '/api'),
       },
