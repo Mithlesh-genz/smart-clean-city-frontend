@@ -1,0 +1,89 @@
+/* frontend/src/index.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    @apply bg-bg text-white antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #10b981;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #059669;
+  }
+
+  /* Selection color */
+  ::selection {
+    background: #10b981;
+    color: #fff;
+  }
+
+  /* Focus ring */
+  *:focus-visible {
+    outline: 2px solid #10b981;
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply rounded-2xl border border-white/[0.06] bg-white/[0.02] backdrop-blur-xl;
+  }
+
+  .glass-card-hover {
+    @apply transition-all duration-300 hover:-translate-y-0.5 hover:border-emerald-400/20 hover:bg-white/[0.04];
+  }
+
+  .nav-item {
+    @apply group relative flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm transition-all;
+  }
+
+  .nav-item-active {
+    @apply bg-emerald-500/10 text-emerald-300 border border-emerald-500/10;
+  }
+
+  .nav-item-inactive {
+    @apply text-slate-400 hover:bg-white/[0.04] hover:text-white;
+  }
+
+  .stat-value {
+    @apply text-2xl font-bold tracking-tight;
+  }
+
+  .stat-label {
+    @apply mt-1 text-xs font-medium text-slate-400;
+  }
+
+  .stat-subtitle {
+    @apply mt-1 text-[10px] text-slate-600;
+  }
+
+  .badge-up {
+    @apply inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-400;
+  }
+
+  .badge-down {
+    @apply inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-1 text-[10px] font-semibold text-red-400;
+  }
+}
