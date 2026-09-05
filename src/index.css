@@ -1,20 +1,14 @@
-/* frontend/src/index.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  * {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-  }
-
   body {
-    @apply bg-bg text-white antialiased;
+    @apply bg-bg text-white transition-colors duration-300;
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
   }
 
+  /* Custom scrollbar – Twitter/X style */
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -25,65 +19,62 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #10b981;
-    border-radius: 3px;
+    background: #4a4a4a;
+    border-radius: 10px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: #059669;
+    background: #6a6a6a;
   }
 
-  /* Selection color */
-  ::selection {
-    background: #10b981;
-    color: #fff;
-  }
-
-  /* Focus ring */
-  *:focus-visible {
-    outline: 2px solid #10b981;
-    outline-offset: 2px;
+  /* Firefox scrollbar */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #4a4a4a transparent;
   }
 }
 
 @layer components {
+
+  /* Glassmorphism card */
   .glass-card {
-    @apply rounded-2xl border border-white/[0.06] bg-white/[0.02] backdrop-blur-xl;
+    @apply bg-gray-900/50 backdrop-blur-sm border border-gray-800/50 rounded-xl;
   }
 
-  .glass-card-hover {
-    @apply transition-all duration-300 hover:-translate-y-0.5 hover:border-emerald-400/20 hover:bg-white/[0.04];
+  /* Primary button */
+  .btn-primary {
+    @apply bg-primary text-white px-4 py-2 rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
-  .nav-item {
-    @apply group relative flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm transition-all;
+  /* Input field */
+  .input-field {
+    @apply w-full px-4 py-2.5 bg-gray-800/50 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary transition-colors;
   }
 
-  .nav-item-active {
-    @apply bg-emerald-500/10 text-emerald-300 border border-emerald-500/10;
+  /* Input with error */
+  .input-error {
+    @apply border-red-500 focus:ring-red-500;
   }
 
-  .nav-item-inactive {
-    @apply text-slate-400 hover:bg-white/[0.04] hover:text-white;
+  /* Badge */
+  .badge {
+    @apply px-2.5 py-0.5 rounded-full text-xs font-medium;
   }
 
-  .stat-value {
-    @apply text-2xl font-bold tracking-tight;
+  /* Status badge variants */
+  .badge-active {
+    @apply badge bg-green-500/20 text-green-500;
   }
 
-  .stat-label {
-    @apply mt-1 text-xs font-medium text-slate-400;
+  .badge-inactive {
+    @apply badge bg-gray-500/20 text-gray-400;
   }
 
-  .stat-subtitle {
-    @apply mt-1 text-[10px] text-slate-600;
+  .badge-pending {
+    @apply badge bg-yellow-500/20 text-yellow-500;
   }
 
-  .badge-up {
-    @apply inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-400;
-  }
-
-  .badge-down {
-    @apply inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-1 text-[10px] font-semibold text-red-400;
+  .badge-suspended {
+    @apply badge bg-red-500/20 text-red-500;
   }
 }
