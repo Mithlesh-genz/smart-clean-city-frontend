@@ -1,930 +1,441 @@
-// Settings.jsx
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import './Settings.css'; // Optional: for styling
+// frontend/src/pages/Settings.jsx
+import React, { useState, useEffect } from 'react';
+import { useAuth } from '../context/AuthContext';
+import {
+    Settings as SettingsIcon,
+    User,
+    Bell,
+    Shield,
+    Globe,
+    Moon,
+    Sun,
+    Save,
+    Key,
+    Loader2,
+    CheckCircle,
+    AlertCircle,
+    LogOut,
+} from 'lucide-react';
+import toast from 'react-hot-toast';
+import api from '../services/api';
 
-// Settings Component
-const Settings = ({
-  // Core props
-  settings = {},
-  onSettingsUpdate,
-  onSettingsReset,
-  onSettingChange,
-  
-  // Configuration
-  sections = [
-    'general',
-    'appearance',
-    'notifications',
-    'privacy',
-    'security',
-    'integrations',
-    'advanced'
-  ],
-  sectionLabels = {
-    general: 'General',
-    appearance: 'Appearance',
-    notifications: 'Notifications',
-    privacy: 'Privacy & Security',
-    security: 'Security',
-    integrations: 'Integrations',
-    advanced: 'Advanced'
-  },
-  sectionIcons = {
-    general: '⚙️',
-    appearance: '🎨',
-    notifications: '🔔',
-    privacy: '🔒',
-    security: '🛡️',
-    integrations: '🔗',
-    advanced: '🚀'
-  },
-  
-  // UI props
-  isLoading = false,
-  error = null,
-  readOnly = false,
-  showSaveButton = true,
-  showResetButton = true,
-  showSearch = true,
-  showBreadcrumbs = true,
-  showSectionIcons = true,
-  showValidation = true,
-  
-  // Theme and styling
-  theme = 'light',
-  className = '',
-  style = {},
-  layout = 'tabs', // 'tabs', 'sidebar', 'cards'
-  
-  // Validation
-  validators = {},
-  
-  // Custom render props
-  renderSection,
-  renderSetting,
-  renderCustomSection,
-  renderEmptyState,
-  renderLoadingState,
-  renderErrorState,
-  renderActions,
-  
-  // Event handlers
-  onSave,
-  onReset,
-  onValidate,
-  onTabChange,
-  onSettingFocus,
-  onSettingBlur,
-  
-  // Children
-  children,
-}) => {
-  // State
-  const [settingsState, setSettingsState] = useState(settings);
-  const [activeSection, setActiveSection] = useState(sections[0] || 'general');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [isDirty, setIsDirty] = useState(false);
-  const [validationErrors, setValidationErrors] = useState({});
-  const [isSaving, setIsSaving] = useState(false);
-  const [isResetting, setIsResetting] = useState(false);
-  const [expandedSections, setExpandedSections] = useState({});
-  const [themeMode, setThemeMode] = useState(theme);
-  
-  // Refs
-  const formRef = useRef(null);
-  const searchInputRef = useRef(null);
-  const settingsRef = useRef({});
+const Settings = () => {
+    const { user, logout, updateUser } = useAuth();
 
-  // Default settings structure
-  const defaultSettings = useMemo(() => ({
-    general: {
-      appName: 'My App',
-      appVersion: '1.0.0',
-      language: 'en',
-      timezone: 'UTC',
-      dateFormat: 'MM/DD/YYYY',
-      timeFormat: '24h',
-    },
-    appearance: {
-      theme: 'light',
-      accentColor: '#1976D2',
-      fontSize: 'medium',
-      compactMode: false,
-      animations: true,
-      sidebarCollapsed: false,
-    },
-    notifications: {
-      email: true,
-      push: true,
-      sms: false,
-      inApp: true,
-      frequency: 'instant',
-      quietHours: {
-        enabled: false,
-        start: '22:00',
-        end: '08:00',
-      },
-      categories: {
-        updates: true,
-        alerts: true,
-        promotions: false,
-        system: true,
-      },
-    },
-    privacy: {
-      shareData: false,
-      analytics: true,
-      cookies: true,
-      marketingEmails: false,
-      twoFactorAuth: false,
-      sessionTimeout: 30,
-    },
-    security: {
-      passwordLastChanged: null,
-      twoFactorEnabled: false,
-      trustedDevices: [],
-      loginHistory: [],
-      securityQuestions: [],
-      passwordPolicy: {
-        minLength: 8,
-        requireUppercase: true,
-        requireLowercase: true,
-        requireNumbers: true,
-        requireSpecial: true,
-      },
-    },
-    integrations: {
-      enabled: [],
-      connected: {},
-      webhooks: [],
-      apiKeys: [],
-    },
-    advanced: {
-      debugMode: false,
-      developerTools: false,
-      experimentalFeatures: false,
-      logLevel: 'info',
-      cacheSize: 100,
-      maxUploadSize: 10,
-    },
-  }), []);
-
-  // Search filter
-  const filteredSections = useMemo(() => {
-    if (!searchTerm) return sections;
-    
-    const searchLower = searchTerm.toLowerCase();
-    return sections.filter(section => {
-      const sectionData = settingsState[section] || {};
-      const matchesSection = sectionLabels[section]?.toLowerCase().includes(searchLower);
-      const matchesSetting = Object.entries(sectionData).some(([key, value]) => {
-        const keyMatch = key.toLowerCase().includes(searchLower);
-        const valueMatch = String(value).toLowerCase().includes(searchLower);
-        return keyMatch || valueMatch;
-      });
-      return matchesSection || matchesSetting;
+    // ─── State ──────────────────────────────────────────────────────
+    // Profile
+    const [profile, setProfile] = useState({
+        firstName: '',
+        lastName: '',
+        email: '',
+        phone: '',
     });
-  }, [sections, searchTerm, settingsState, sectionLabels]);
+    const [profileLoading, setProfileLoading] = useState(true);
 
-  // Get current section settings
-  const currentSettings = useMemo(() => {
-    return settingsState[activeSection] || {};
-  }, [settingsState, activeSection]);
+    // Password change
+    const [passwordData, setPasswordData] = useState({
+        currentPassword: '',
+        newPassword: '',
+        confirmPassword: '',
+    });
+    const [passwordLoading, setPasswordLoading] = useState(false);
 
-  // Validation
-  const validateSection = useCallback((section, data) => {
-    const errors = {};
-    const validator = validators[section];
-    
-    if (validator) {
-      Object.keys(data).forEach(key => {
-        const value = data[key];
-        const rules = validator[key];
-        
-        if (rules) {
-          if (rules.required && !value) {
-            errors[key] = `${key} is required`;
-          }
-          if (rules.min && value < rules.min) {
-            errors[key] = `${key} must be at least ${rules.min}`;
-          }
-          if (rules.max && value > rules.max) {
-            errors[key] = `${key} must be at most ${rules.max}`;
-          }
-          if (rules.pattern && !rules.pattern.test(value)) {
-            errors[key] = `${key} format is invalid`;
-          }
-          if (rules.custom && !rules.custom(value)) {
-            errors[key] = `${key} is invalid`;
-          }
-        }
-      });
-    }
-    
-    return errors;
-  }, [validators]);
-
-  // Setting change handler
-  const handleSettingChange = useCallback((section, key, value) => {
-    setSettingsState(prev => {
-      const sectionData = { ...prev[section] };
-      sectionData[key] = value;
-      
-      // Check if value actually changed
-      const oldValue = settings[section]?.[key];
-      if (oldValue !== value) {
-        setIsDirty(true);
-      }
-      
-      return { ...prev, [section]: sectionData };
+    // Preferences (stored in localStorage, will sync to backend later)
+    const [preferences, setPreferences] = useState({
+        theme: 'dark',
+        language: 'en',
+        notifications: true,
+        emailNotifications: true,
+        pushNotifications: false,
     });
 
-    onSettingChange?.(section, key, value);
-    
-    // Validate if needed
-    if (showValidation) {
-      const errors = validateSection(section, { [key]: value });
-      setValidationErrors(prev => ({
-        ...prev,
-        ...errors
-      }));
-    }
-  }, [settings, onSettingChange, showValidation, validateSection]);
-
-  // Save settings
-  const handleSave = useCallback(async () => {
-    // Validate all sections
-    const allErrors = {};
-    Object.keys(settingsState).forEach(section => {
-      const errors = validateSection(section, settingsState[section]);
-      if (Object.keys(errors).length > 0) {
-        allErrors[section] = errors;
-      }
+    // System settings (camera defaults, etc. – stored in localStorage for now)
+    const [systemSettings, setSystemSettings] = useState({
+        defaultFps: 30,
+        defaultConfidence: 0.7,
     });
-    
-    if (Object.keys(allErrors).length > 0) {
-      setValidationErrors(allErrors);
-      return;
-    }
-    
-    setIsSaving(true);
-    try {
-      await onSettingsUpdate?.(settingsState);
-      await onSave?.(settingsState);
-      setIsDirty(false);
-    } catch (err) {
-      console.error('Save error:', err);
-    } finally {
-      setIsSaving(false);
-    }
-  }, [settingsState, validateSection, onSettingsUpdate, onSave]);
 
-  // Reset settings
-  const handleReset = useCallback(() => {
-    if (window.confirm('Are you sure you want to reset all settings to default?')) {
-      setIsResetting(true);
-      try {
-        setSettingsState(defaultSettings);
-        onSettingsReset?.(defaultSettings);
-        onReset?.(defaultSettings);
-        setIsDirty(false);
-        setValidationErrors({});
-      } catch (err) {
-        console.error('Reset error:', err);
-      } finally {
-        setIsResetting(false);
-      }
-    }
-  }, [defaultSettings, onSettingsReset, onReset]);
+    // UI states
+    const [savingProfile, setSavingProfile] = useState(false);
+    const [savingPrefs, setSavingPrefs] = useState(false);
+    const [savingSystem, setSavingSystem] = useState(false);
 
-  // Tab change handler
-  const handleTabChange = useCallback((section) => {
-    // Check for unsaved changes
-    if (isDirty) {
-      if (!window.confirm('You have unsaved changes. Are you sure you want to leave?')) {
-        return;
-      }
-    }
-    
-    setActiveSection(section);
-    onTabChange?.(section);
-    setSearchTerm('');
-    setValidationErrors({});
-  }, [isDirty, onTabChange]);
+    // ─── Load profile ──────────────────────────────────────────────
+    useEffect(() => {
+        const fetchProfile = async () => {
+            try {
+                const userData = await api.get('/users/profile/me');
+                setProfile({
+                    firstName: userData.firstName || '',
+                    lastName: userData.lastName || '',
+                    email: userData.email || '',
+                    phone: userData.phone || '',
+                });
+                // Load preferences from localStorage (or backend)
+                const savedPrefs = localStorage.getItem('app_preferences');
+                if (savedPrefs) {
+                    setPreferences(JSON.parse(savedPrefs));
+                }
+                const savedSystem = localStorage.getItem('app_system_settings');
+                if (savedSystem) {
+                    setSystemSettings(JSON.parse(savedSystem));
+                }
+            } catch (err) {
+                toast.error('Failed to load profile');
+            } finally {
+                setProfileLoading(false);
+            }
+        };
+        fetchProfile();
+    }, []);
 
-  // Search handler
-  const handleSearch = useCallback((e) => {
-    setSearchTerm(e.target.value);
-  }, []);
-
-  // Section expand toggle
-  const toggleSection = useCallback((section) => {
-    setExpandedSections(prev => ({
-      ...prev,
-      [section]: !prev[section]
-    }));
-  }, []);
-
-  // Render setting input
-  const renderSettingInput = useCallback((key, value, section) => {
-    if (renderSetting) {
-      return renderSetting(key, value, section, {
-        onChange: (val) => handleSettingChange(section, key, val),
-        error: validationErrors[section]?.[key],
-        isDirty: isDirty,
-        readOnly,
-      });
-    }
-
-    const error = validationErrors[section]?.[key];
-    const isBoolean = typeof value === 'boolean';
-    const isNumber = typeof value === 'number';
-    const isObject = typeof value === 'object' && value !== null && !Array.isArray(value);
-    const isArray = Array.isArray(value);
-
-    // Boolean - Toggle
-    if (isBoolean) {
-      return (
-        <div className="setting-toggle">
-          <label className="toggle-switch">
-            <input
-              type="checkbox"
-              checked={value}
-              onChange={(e) => handleSettingChange(section, key, e.target.checked)}
-              disabled={readOnly}
-            />
-            <span className="toggle-slider"></span>
-          </label>
-          <span className="setting-value">{value ? 'On' : 'Off'}</span>
-        </div>
-      );
-    }
-
-    // Number - Range or Input
-    if (isNumber) {
-      return (
-        <div className="setting-number">
-          <input
-            type="number"
-            value={value}
-            onChange={(e) => handleSettingChange(section, key, parseFloat(e.target.value) || 0)}
-            className={error ? 'input-error' : ''}
-            disabled={readOnly}
-          />
-          {error && <span className="error-message">{error}</span>}
-        </div>
-      );
-    }
-
-    // Object - Nested settings
-    if (isObject) {
-      return (
-        <div className="setting-object">
-          {Object.entries(value).map(([subKey, subValue]) => (
-            <div key={subKey} className="nested-setting">
-              <label className="setting-label">
-                {subKey.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
-              </label>
-              {renderSettingInput(`${key}.${subKey}`, subValue, section)}
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    // Array - Simple display
-    if (isArray) {
-      return (
-        <div className="setting-array">
-          <div className="array-items">
-            {value.map((item, index) => (
-              <span key={index} className="array-item">
-                {typeof item === 'object' ? JSON.stringify(item) : String(item)}
-              </span>
-            ))}
-          </div>
-          {!readOnly && (
-            <button 
-              className="array-add-btn"
-              onClick={() => {
-                const newArray = [...value, ''];
-                handleSettingChange(section, key, newArray);
-              }}
-            >
-              + Add
-            </button>
-          )}
-        </div>
-      );
-    }
-
-    // String - Input or Select
-    const stringOptions = getStringOptions(key);
-    if (stringOptions) {
-      return (
-        <select
-          value={value}
-          onChange={(e) => handleSettingChange(section, key, e.target.value)}
-          className={error ? 'input-error' : ''}
-          disabled={readOnly}
-        >
-          <option value="">Select...</option>
-          {stringOptions.map(option => (
-            <option key={option} value={option}>{option}</option>
-          ))}
-        </select>
-      );
-    }
-
-    // Default - Text input
-    return (
-      <div className="setting-text">
-        <input
-          type="text"
-          value={value || ''}
-          onChange={(e) => handleSettingChange(section, key, e.target.value)}
-          className={error ? 'input-error' : ''}
-          placeholder={`Enter ${key.replace(/([A-Z])/g, ' $1').toLowerCase()}`}
-          disabled={readOnly}
-        />
-        {error && <span className="error-message">{error}</span>}
-      </div>
-    );
-  }, [validationErrors, isDirty, readOnly, handleSettingChange, renderSetting]);
-
-  // Helper to get string options for specific keys
-  const getStringOptions = useCallback((key) => {
-    const options = {
-      language: ['en', 'es', 'fr', 'de', 'zh', 'ja', 'pt', 'ar', 'hi'],
-      theme: ['light', 'dark', 'system'],
-      fontSize: ['small', 'medium', 'large', 'xlarge'],
-      dateFormat: ['MM/DD/YYYY', 'DD/MM/YYYY', 'YYYY-MM-DD'],
-      timeFormat: ['12h', '24h'],
-      frequency: ['instant', 'hourly', 'daily', 'weekly'],
-      logLevel: ['debug', 'info', 'warn', 'error'],
-    };
-    return options[key] || null;
-  }, []);
-
-  // Render section content
-  const renderSectionContent = useCallback((section) => {
-    if (renderSection) {
-      return renderSection(section, settingsState[section], {
-        onChange: (key, value) => handleSettingChange(section, key, value),
-        errors: validationErrors[section] || {},
-        isDirty,
-        readOnly,
-      });
-    }
-
-    const sectionData = settingsState[section] || {};
-    const entries = Object.entries(sectionData);
-
-    if (entries.length === 0) {
-      return (
-        <div className="section-empty">
-          <p>No settings available for this section.</p>
-        </div>
-      );
-    }
-
-    return (
-      <div className="settings-section-content">
-        {entries.map(([key, value]) => {
-          // Skip nested objects with multiple properties for better layout
-          if (typeof value === 'object' && value !== null && !Array.isArray(value) && Object.keys(value).length > 1) {
-            return (
-              <div key={key} className="setting-group">
-                <h4 className="setting-group-title">
-                  {key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
-                </h4>
-                <div className="setting-group-content">
-                  {Object.entries(value).map(([subKey, subValue]) => (
-                    <div key={subKey} className="setting-item">
-                      <label className="setting-label">
-                        {subKey.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
-                      </label>
-                      {renderSettingInput(`${key}.${subKey}`, subValue, section)}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          }
-
-          return (
-            <div key={key} className="setting-item">
-              <label className="setting-label">
-                {key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
-              </label>
-              {renderSettingInput(key, value, section)}
-            </div>
-          );
-        })}
-      </div>
-    );
-  }, [settingsState, validationErrors, isDirty, readOnly, handleSettingChange, renderSettingInput, renderSection]);
-
-  // Effects
-  useEffect(() => {
-    setSettingsState(settings);
-  }, [settings]);
-
-  useEffect(() => {
-    setThemeMode(theme);
-  }, [theme]);
-
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      // Ctrl+S or Cmd+S to save
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    // ─── Save profile ──────────────────────────────────────────────
+    const handleSaveProfile = async (e) => {
         e.preventDefault();
-        if (isDirty) {
-          handleSave();
+        setSavingProfile(true);
+        try {
+            // Update profile via /users/profile (own profile)
+            const response = await api.put('/users/profile', {
+                firstName: profile.firstName,
+                lastName: profile.lastName,
+                phone: profile.phone,
+            });
+            // Also update the auth context
+            if (updateUser) {
+                updateUser(response.user);
+            }
+            toast.success('Profile updated');
+        } catch (err) {
+            toast.error(err.response?.data?.message || 'Failed to update profile');
+        } finally {
+            setSavingProfile(false);
         }
-      }
-      
-      // Escape to close search
-      if (e.key === 'Escape' && searchTerm) {
-        setSearchTerm('');
-        searchInputRef.current?.blur();
-      }
     };
 
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isDirty, handleSave, searchTerm]);
+    // ─── Change password ──────────────────────────────────────────
+    const handleChangePassword = async (e) => {
+        e.preventDefault();
+        if (passwordData.newPassword !== passwordData.confirmPassword) {
+            toast.error('Passwords do not match');
+            return;
+        }
+        if (passwordData.newPassword.length < 8) {
+            toast.error('Password must be at least 8 characters');
+            return;
+        }
+        setPasswordLoading(true);
+        try {
+            await api.post(`/users/${user.id}/change-password`, {
+                currentPassword: passwordData.currentPassword,
+                newPassword: passwordData.newPassword,
+                confirmPassword: passwordData.confirmPassword,
+            });
+            toast.success('Password changed successfully');
+            setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+        } catch (err) {
+            toast.error(err.response?.data?.message || 'Failed to change password');
+        } finally {
+            setPasswordLoading(false);
+        }
+    };
 
-  // Render loading state
-  if (isLoading) {
-    if (renderLoadingState) return renderLoadingState();
+    // ─── Save preferences (localStorage + future API) ────────────
+    const handleSavePreferences = async () => {
+        setSavingPrefs(true);
+        try {
+            // Save to localStorage (simulate backend call)
+            localStorage.setItem('app_preferences', JSON.stringify(preferences));
+            // If you have a backend endpoint for preferences, call it here.
+            // Example: await api.put('/users/preferences', preferences);
+            toast.success('Preferences saved');
+        } catch (err) {
+            toast.error('Failed to save preferences');
+        } finally {
+            setSavingPrefs(false);
+        }
+    };
+
+    // ─── Save system settings ─────────────────────────────────────
+    const handleSaveSystem = async () => {
+        setSavingSystem(true);
+        try {
+            localStorage.setItem('app_system_settings', JSON.stringify(systemSettings));
+            // Example: await api.put('/system/settings', systemSettings);
+            toast.success('System settings saved');
+        } catch (err) {
+            toast.error('Failed to save system settings');
+        } finally {
+            setSavingSystem(false);
+        }
+    };
+
+    // ─── Logout ─────────────────────────────────────────────────────
+    const handleLogout = () => {
+        if (window.confirm('Are you sure you want to logout?')) {
+            logout();
+        }
+    };
+
+    // ─── Render ────────────────────────────────────────────────────
+    if (profileLoading) {
+        return (
+            <div className="flex justify-center items-center h-64">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+            </div>
+        );
+    }
+
     return (
-      <div className="settings-loading">
-        <div className="loading-spinner"></div>
-        <p>Loading settings...</p>
-      </div>
+        <div className="p-6 max-w-4xl mx-auto">
+            <div className="flex items-center gap-2 mb-6">
+                <SettingsIcon className="w-6 h-6 text-primary" />
+                <h1 className="text-2xl font-bold text-white">Settings</h1>
+            </div>
+
+            <div className="space-y-6">
+                {/* ─── Profile Section ────────────────────────────── */}
+                <section className="bg-gray-900/50 backdrop-blur-sm rounded-xl border border-gray-700 p-6">
+                    <h2 className="text-lg font-semibold text-white flex items-center gap-2 mb-4">
+                        <User className="w-5 h-5 text-primary" /> Profile
+                    </h2>
+                    <form onSubmit={handleSaveProfile} className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm text-gray-300 mb-1">First Name</label>
+                                <input
+                                    type="text"
+                                    value={profile.firstName}
+                                    onChange={(e) => setProfile({ ...profile, firstName: e.target.value })}
+                                    className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                                    required
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm text-gray-300 mb-1">Last Name</label>
+                                <input
+                                    type="text"
+                                    value={profile.lastName}
+                                    onChange={(e) => setProfile({ ...profile, lastName: e.target.value })}
+                                    className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                                    required
+                                />
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-sm text-gray-300 mb-1">Email</label>
+                            <input
+                                type="email"
+                                value={profile.email}
+                                disabled
+                                className="w-full px-4 py-2 bg-gray-800/50 border border-gray-700 rounded-lg text-gray-400 cursor-not-allowed"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Email cannot be changed here. Contact admin.</p>
+                        </div>
+                        <div>
+                            <label className="block text-sm text-gray-300 mb-1">Phone</label>
+                            <input
+                                type="tel"
+                                value={profile.phone}
+                                onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
+                                className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                                placeholder="+1234567890"
+                            />
+                        </div>
+                        <button
+                            type="submit"
+                            disabled={savingProfile}
+                            className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded-lg transition disabled:opacity-50"
+                        >
+                            {savingProfile ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                            Save Profile
+                        </button>
+                    </form>
+                </section>
+
+                {/* ─── Security ────────────────────────────────────── */}
+                <section className="bg-gray-900/50 backdrop-blur-sm rounded-xl border border-gray-700 p-6">
+                    <h2 className="text-lg font-semibold text-white flex items-center gap-2 mb-4">
+                        <Shield className="w-5 h-5 text-primary" /> Security
+                    </h2>
+                    <form onSubmit={handleChangePassword} className="space-y-4">
+                        <div>
+                            <label className="block text-sm text-gray-300 mb-1">Current Password</label>
+                            <input
+                                type="password"
+                                value={passwordData.currentPassword}
+                                onChange={(e) => setPasswordData({ ...passwordData, currentPassword: e.target.value })}
+                                className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                                required
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm text-gray-300 mb-1">New Password</label>
+                            <input
+                                type="password"
+                                value={passwordData.newPassword}
+                                onChange={(e) => setPasswordData({ ...passwordData, newPassword: e.target.value })}
+                                className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                                required
+                                minLength="8"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Minimum 8 characters, with at least one uppercase, lowercase, number, and special character.</p>
+                        </div>
+                        <div>
+                            <label className="block text-sm text-gray-300 mb-1">Confirm New Password</label>
+                            <input
+                                type="password"
+                                value={passwordData.confirmPassword}
+                                onChange={(e) => setPasswordData({ ...passwordData, confirmPassword: e.target.value })}
+                                className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                                required
+                            />
+                        </div>
+                        <button
+                            type="submit"
+                            disabled={passwordLoading}
+                            className="flex items-center gap-2 px-4 py-2 bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded-lg transition disabled:opacity-50"
+                        >
+                            {passwordLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4" />}
+                            Change Password
+                        </button>
+                    </form>
+                </section>
+
+                {/* ─── Preferences ──────────────────────────────────── */}
+                <section className="bg-gray-900/50 backdrop-blur-sm rounded-xl border border-gray-700 p-6">
+                    <h2 className="text-lg font-semibold text-white flex items-center gap-2 mb-4">
+                        <Globe className="w-5 h-5 text-primary" /> Preferences
+                    </h2>
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-sm text-gray-300 mb-1">Theme</label>
+                            <div className="flex gap-4">
+                                <button
+                                    type="button"
+                                    onClick={() => setPreferences({ ...preferences, theme: 'dark' })}
+                                    className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${preferences.theme === 'dark'
+                                            ? 'border-primary bg-primary/10 text-primary'
+                                            : 'border-gray-700 text-gray-400 hover:bg-gray-800'
+                                        }`}
+                                >
+                                    <Moon className="w-4 h-4" /> Dark
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setPreferences({ ...preferences, theme: 'light' })}
+                                    className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${preferences.theme === 'light'
+                                            ? 'border-primary bg-primary/10 text-primary'
+                                            : 'border-gray-700 text-gray-400 hover:bg-gray-800'
+                                        }`}
+                                >
+                                    <Sun className="w-4 h-4" /> Light
+                                </button>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-sm text-gray-300 mb-1">Language</label>
+                            <select
+                                value={preferences.language}
+                                onChange={(e) => setPreferences({ ...preferences, language: e.target.value })}
+                                className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                            >
+                                <option value="en">English</option>
+                                <option value="hi">Hindi</option>
+                                <option value="pa">Punjabi</option>
+                            </select>
+                        </div>
+                        <div className="space-y-2">
+                            <label className="flex items-center gap-2 text-sm text-gray-300">
+                                <input
+                                    type="checkbox"
+                                    checked={preferences.notifications}
+                                    onChange={(e) => setPreferences({ ...preferences, notifications: e.target.checked })}
+                                    className="rounded border-gray-700 bg-gray-800 text-primary focus:ring-primary"
+                                />
+                                Enable general notifications
+                            </label>
+                            <label className="flex items-center gap-2 text-sm text-gray-300">
+                                <input
+                                    type="checkbox"
+                                    checked={preferences.emailNotifications}
+                                    onChange={(e) => setPreferences({ ...preferences, emailNotifications: e.target.checked })}
+                                    className="rounded border-gray-700 bg-gray-800 text-primary focus:ring-primary"
+                                />
+                                Email notifications
+                            </label>
+                            <label className="flex items-center gap-2 text-sm text-gray-300">
+                                <input
+                                    type="checkbox"
+                                    checked={preferences.pushNotifications}
+                                    onChange={(e) => setPreferences({ ...preferences, pushNotifications: e.target.checked })}
+                                    className="rounded border-gray-700 bg-gray-800 text-primary focus:ring-primary"
+                                />
+                                Push notifications
+                            </label>
+                        </div>
+                        <button
+                            onClick={handleSavePreferences}
+                            disabled={savingPrefs}
+                            className="flex items-center gap-2 px-4 py-2 bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 rounded-lg transition disabled:opacity-50"
+                        >
+                            {savingPrefs ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                            Save Preferences
+                        </button>
+                    </div>
+                </section>
+
+                {/* ─── System Settings ─────────────────────────────── */}
+                <section className="bg-gray-900/50 backdrop-blur-sm rounded-xl border border-gray-700 p-6">
+                    <h2 className="text-lg font-semibold text-white flex items-center gap-2 mb-4">
+                        <SettingsIcon className="w-5 h-5 text-primary" /> System Settings
+                    </h2>
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-sm text-gray-300 mb-1">Default FPS</label>
+                            <input
+                                type="number"
+                                value={systemSettings.defaultFps}
+                                onChange={(e) => setSystemSettings({ ...systemSettings, defaultFps: parseInt(e.target.value) || 30 })}
+                                className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                                min="1"
+                                max="60"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm text-gray-300 mb-1">Default Confidence Threshold</label>
+                            <input
+                                type="number"
+                                step="0.05"
+                                value={systemSettings.defaultConfidence}
+                                onChange={(e) => setSystemSettings({ ...systemSettings, defaultConfidence: parseFloat(e.target.value) || 0.7 })}
+                                className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                                min="0"
+                                max="1"
+                            />
+                        </div>
+                        <button
+                            onClick={handleSaveSystem}
+                            disabled={savingSystem}
+                            className="flex items-center gap-2 px-4 py-2 bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg transition disabled:opacity-50"
+                        >
+                            {savingSystem ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                            Save System Settings
+                        </button>
+                    </div>
+                </section>
+
+                {/* ─── Logout ───────────────────────────────────────── */}
+                <section className="bg-gray-900/50 backdrop-blur-sm rounded-xl border border-gray-700 p-6">
+                    <button
+                        onClick={handleLogout}
+                        className="flex items-center gap-2 px-4 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg transition"
+                    >
+                        <LogOut className="w-4 h-4" /> Logout
+                    </button>
+                </section>
+            </div>
+        </div>
     );
-  }
-
-  // Render error state
-  if (error) {
-    if (renderErrorState) return renderErrorState(error);
-    return (
-      <div className="settings-error">
-        <span className="error-icon">⚠️</span>
-        <p>{error}</p>
-        <button onClick={() => window.location.reload()}>Retry</button>
-      </div>
-    );
-  }
-
-  // Render empty state
-  if (!settingsState || Object.keys(settingsState).length === 0) {
-    if (renderEmptyState) return renderEmptyState();
-    return (
-      <div className="settings-empty">
-        <span className="empty-icon">⚙️</span>
-        <h3>No Settings Available</h3>
-        <p>Configure your application settings here.</p>
-        {!readOnly && (
-          <button className="reset-btn" onClick={handleReset}>
-            Load Defaults
-          </button>
-        )}
-      </div>
-    );
-  }
-
-  // Main render
-  return (
-    <div 
-      className={`settings-container settings-${themeMode} ${className}`}
-      style={style}
-      ref={formRef}
-    >
-      {/* Header */}
-      <div className="settings-header">
-        <div className="settings-header-left">
-          <h2 className="settings-title">Settings</h2>
-          {showBreadcrumbs && (
-            <div className="settings-breadcrumbs">
-              <span className="breadcrumb-item">Settings</span>
-              <span className="breadcrumb-separator">/</span>
-              <span className="breadcrumb-item active">
-                {sectionLabels[activeSection] || activeSection}
-              </span>
-            </div>
-          )}
-        </div>
-        
-        <div className="settings-header-right">
-          {showSearch && (
-            <div className="settings-search">
-              <input
-                ref={searchInputRef}
-                type="text"
-                placeholder="Search settings..."
-                value={searchTerm}
-                onChange={handleSearch}
-                className="search-input"
-              />
-              <span className="search-icon">🔍</span>
-            </div>
-          )}
-          
-          <div className="settings-actions">
-            {showSaveButton && !readOnly && (
-              <button
-                className={`save-btn ${isDirty ? 'dirty' : ''}`}
-                onClick={handleSave}
-                disabled={!isDirty || isSaving}
-              >
-                {isSaving ? 'Saving...' : isDirty ? 'Save Changes' : 'Saved ✓'}
-              </button>
-            )}
-            
-            {showResetButton && !readOnly && (
-              <button
-                className="reset-btn"
-                onClick={handleReset}
-                disabled={isResetting}
-              >
-                {isResetting ? 'Resetting...' : 'Reset to Defaults'}
-              </button>
-            )}
-            
-            {renderActions && renderActions({
-              isDirty,
-              isSaving,
-              isResetting,
-              onSave: handleSave,
-              onReset: handleReset,
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Unsaved changes indicator */}
-      {isDirty && (
-        <div className="unsaved-indicator">
-          <span className="unsaved-icon">⚠️</span>
-          <span>You have unsaved changes</span>
-          <button className="save-now-btn" onClick={handleSave}>
-            Save Now
-          </button>
-        </div>
-      )}
-
-      {/* Main Content */}
-      <div className="settings-content">
-        {/* Navigation */}
-        <div className={`settings-nav settings-nav-${layout}`}>
-          {layout === 'sidebar' && (
-            <div className="settings-sidebar">
-              {filteredSections.map(section => (
-                <button
-                  key={section}
-                  className={`sidebar-item ${activeSection === section ? 'active' : ''}`}
-                  onClick={() => handleTabChange(section)}
-                >
-                  {showSectionIcons && (
-                    <span className="sidebar-icon">{sectionIcons[section] || '📋'}</span>
-                  )}
-                  <span className="sidebar-label">{sectionLabels[section] || section}</span>
-                  {isDirty && activeSection !== section && (
-                    <span className="sidebar-dirty">●</span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {layout === 'tabs' && (
-            <div className="settings-tabs">
-              {filteredSections.map(section => (
-                <button
-                  key={section}
-                  className={`tab-item ${activeSection === section ? 'active' : ''}`}
-                  onClick={() => handleTabChange(section)}
-                >
-                  {showSectionIcons && (
-                    <span className="tab-icon">{sectionIcons[section] || '📋'}</span>
-                  )}
-                  <span className="tab-label">{sectionLabels[section] || section}</span>
-                  {isDirty && activeSection !== section && (
-                    <span className="tab-dirty">●</span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {layout === 'cards' && (
-            <div className="settings-cards">
-              {filteredSections.map(section => (
-                <div
-                  key={section}
-                  className={`card-item ${activeSection === section ? 'active' : ''}`}
-                  onClick={() => handleTabChange(section)}
-                >
-                  {showSectionIcons && (
-                    <div className="card-icon">{sectionIcons[section] || '📋'}</div>
-                  )}
-                  <div className="card-content">
-                    <h4 className="card-title">{sectionLabels[section] || section}</h4>
-                    {isDirty && activeSection !== section && (
-                      <span className="card-dirty">Modified</span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Content Area */}
-        <div className="settings-panel">
-          {renderCustomSection && renderCustomSection({
-            section: activeSection,
-            data: currentSettings,
-            isActive: true,
-            onChange: (key, value) => handleSettingChange(activeSection, key, value),
-            errors: validationErrors[activeSection] || {},
-            isDirty,
-            readOnly,
-          })}
-          
-          {!renderCustomSection && renderSectionContent(activeSection)}
-          
-          {children && (
-            <div className="settings-children">
-              {children}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Footer */}
-      <div className="settings-footer">
-        <span className="settings-version">
-          Version {settingsState.general?.appVersion || '1.0.0'}
-        </span>
-        <span className="settings-last-saved">
-          {isDirty ? 'Changes pending' : 'All changes saved'}
-        </span>
-      </div>
-    </div>
-  );
-};
-
-// Sub-components for modular usage
-
-// Setting Toggle Component
-export const SettingToggle = ({ 
-  label, 
-  value, 
-  onChange, 
-  disabled = false,
-  className = '',
-  ...props 
-}) => {
-  return (
-    <div className={`setting-toggle-wrapper ${className}`}>
-      <label className="toggle-label">{label}</label>
-      <div className="toggle-control">
-        <label className="toggle-switch">
-          <input
-            type="checkbox"
-            checked={value}
-            onChange={(e) => onChange(e.target.checked)}
-            disabled={disabled}
-            {...props}
-          />
-          <span className="toggle-slider"></span>
-        </label>
-        <span className="toggle-status">{value ? 'On' : 'Off'}</span>
-      </div>
-    </div>
-  );
-};
-
-// Setting Select Component
-export const SettingSelect = ({ 
-  label, 
-  value, 
-  options, 
-  onChange, 
-  disabled = false,
-  className = '',
-  ...props 
-}) => {
-  return (
-    <div className={`setting-select-wrapper ${className}`}>
-      <label className="select-label">{label}</label>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-        {...props}
-      >
-        <option value="">Select...</option>
-        {options.map(option => (
-          <option key={option} value={option}>{option}</option>
-        ))}
-      </select>
-    </div>
-  );
-};
-
-// Setting Input Component
-export const SettingInput = ({ 
-  label, 
-  value, 
-  type = 'text', 
-  onChange, 
-  placeholder = '',
-  disabled = false,
-  error = '',
-  className = '',
-  ...props 
-}) => {
-  return (
-    <div className={`setting-input-wrapper ${className}`}>
-      <label className="input-label">{label}</label>
-      <div className="input-control">
-        <input
-          type={type}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
-          disabled={disabled}
-          className={error ? 'error' : ''}
-          {...props}
-        />
-        {error && <span className="input-error">{error}</span>}
-      </div>
-    </div>
-  );
-};
-
-// Setting Range Component
-export const SettingRange = ({ 
-  label, 
-  value, 
-  min = 0, 
-  max = 100, 
-  step = 1, 
-  onChange,
-  disabled = false,
-  showValue = true,
-  className = '',
-  ...props 
-}) => {
-  return (
-    <div className={`setting-range-wrapper ${className}`}>
-      <div className="range-header">
-        <label className="range-label">{label}</label>
-        {showValue && <span className="range-value">{value}</span>}
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
-        disabled={disabled}
-        {...props}
-      />
-    </div>
-  );
-};
-
-// Setting Color Picker
-export const SettingColor = ({ 
-  label, 
-  value, 
-  onChange, 
-  disabled = false,
-  className = '',
-  ...props 
-}) => {
-  return (
-    <div className={`setting-color-wrapper ${className}`}>
-      <label className="color-label">{label}</label>
-      <div className="color-control">
-        <input
-          type="color"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-          {...props}
-        />
-        <span className="color-hex">{value}</span>
-      </div>
-    </div>
-  );
 };
 
 export default Settings;

@@ -1,1050 +1,596 @@
-// LiveMonitoring.jsx
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import './LiveMonitoring.css'; // Optional: for styling
+// frontend/src/pages/LiveMonitoring.jsx
+import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { useFetch } from '../hooks/useFetch';
+import {
+    Camera,
+    Video,
+    VideoOff,
+    Plus,
+    RefreshCw,
+    Play,
+    Pause,
+    Image,
+    AlertCircle,
+    Maximize2,
+    Minimize2,
+    Wifi,
+    WifiOff,
+} from 'lucide-react';
+import toast from 'react-hot-toast';
 
-// Live Monitoring Component
-const LiveMonitoring = ({
-  // Data props
-  data = {
-    devices: [],
-    metrics: {},
-    alerts: [],
-    status: {},
-    history: [],
-  },
-  onDataUpdate,
-  onAlertAcknowledge,
-  onDeviceControl,
-  onThresholdUpdate,
-  
-  // Configuration
-  updateInterval = 5000, // ms
-  maxHistoryPoints = 100,
-  alertThresholds = {
-    critical: 90,
-    warning: 70,
-    info: 50,
-  },
-  
-  // UI props
-  isLoading = false,
-  error = null,
-  showMetrics = true,
-  showAlerts = true,
-  showHistory = true,
-  showStatusGrid = true,
-  showControls = true,
-  showCharts = true,
-  showFilters = true,
-  showSearch = true,
-  showAutoScroll = true,
-  
-  // Theme and styling
-  theme = 'dark',
-  className = '',
-  style = {},
-  statusColors = {
-    online: '#4CAF50',
-    offline: '#9E9E9E',
-    warning: '#FF9800',
-    error: '#F44336',
-    critical: '#D32F2F',
-    idle: '#2196F3',
-  },
-  
-  // Custom render props
-  renderDeviceCard,
-  renderMetric,
-  renderAlert,
-  renderStatusIndicator,
-  renderChart,
-  renderEmptyState,
-  renderLoadingState,
-  renderErrorState,
-  renderControls,
-  
-  // Event handlers
-  onDeviceSelect,
-  onAlertClick,
-  onMetricClick,
-  onStatusClick,
-  onRefresh,
-  onExport,
-  
-  // Children
-  children,
-}) => {
-  // State
-  const [monitoringData, setMonitoringData] = useState(data);
-  const [selectedDevice, setSelectedDevice] = useState(null);
-  const [selectedMetric, setSelectedMetric] = useState(null);
-  const [alerts, setAlerts] = useState(data.alerts || []);
-  const [history, setHistory] = useState(data.history || []);
-  const [status, setStatus] = useState(data.status || {});
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filters, setFilters] = useState({
-    status: '',
-    type: '',
-    priority: '',
-  });
-  const [isConnected, setIsConnected] = useState(true);
-  const [lastUpdate, setLastUpdate] = useState(new Date());
-  const [autoScroll, setAutoScroll] = useState(showAutoScroll);
-  const [expandedAlerts, setExpandedAlerts] = useState(new Set());
-  const [alertCounts, setAlertCounts] = useState({
-    critical: 0,
-    warning: 0,
-    info: 0,
-  });
-  
-  // Refs
-  const wsRef = useRef(null);
-  const historyRef = useRef(null);
-  const alertRef = useRef(null);
-  const intervalRef = useRef(null);
-  const reconnectTimeoutRef = useRef(null);
-  const chartRefs = useRef({});
+const getCacheBustUrl = (url) => {
+    if (!url) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}_t=${Date.now()}`;
+};
 
-  // Derived data
-  const devicesData = useMemo(() => {
-    return monitoringData.devices || [];
-  }, [monitoringData]);
-
-  const metricsData = useMemo(() => {
-    return monitoringData.metrics || {};
-  }, [monitoringData]);
-
-  const statusData = useMemo(() => {
-    return monitoringData.status || {};
-  }, [monitoringData]);
-
-  // Filter devices
-  const filteredDevices = useMemo(() => {
-    let result = [...devicesData];
-    
-    if (searchTerm) {
-      const searchLower = searchTerm.toLowerCase();
-      result = result.filter(device =>
-        device.name?.toLowerCase().includes(searchLower) ||
-        device.id?.toLowerCase().includes(searchLower) ||
-        device.type?.toLowerCase().includes(searchLower) ||
-        device.location?.toLowerCase().includes(searchLower)
-      );
+const guessStreamType = (url) => {
+    if (!url) return 'unknown';
+    const lower = url.toLowerCase();
+    if (lower.includes('.m3u8')) return 'hls';
+    if (lower.includes('.mp4') || lower.includes('.webm') || lower.includes('.mov')) return 'mp4';
+    if (lower.includes('mjpeg') || lower.includes('cgi-bin') || lower.includes('stream') || lower.includes('snapshot')) {
+        return 'mjpeg';
     }
-    
-    if (filters.status) {
-      result = result.filter(device => device.status === filters.status);
-    }
-    
-    if (filters.type) {
-      result = result.filter(device => device.type === filters.type);
-    }
-    
-    if (filters.priority) {
-      result = result.filter(device => device.priority === filters.priority);
-    }
-    
-    return result;
-  }, [devicesData, searchTerm, filters]);
+    return 'unknown';
+};
 
-  // Calculate alert counts
-  useEffect(() => {
-    const counts = alerts.reduce((acc, alert) => {
-      if (alert.priority === 'critical') acc.critical++;
-      else if (alert.priority === 'warning') acc.warning++;
-      else if (alert.priority === 'info') acc.info++;
-      return acc;
-    }, { critical: 0, warning: 0, info: 0 });
-    setAlertCounts(counts);
-  }, [alerts]);
+const isMJPEG = (url) => {
+    if (!url) return false;
+    const lower = url.toLowerCase();
+    return lower.includes('mjpeg') || lower.includes('cgi-bin') || lower.includes('stream') || lower.includes('snapshot');
+};
 
-  // WebSocket connection
-  useEffect(() => {
-    const connectWebSocket = () => {
-      try {
-        // In a real app, you would connect to your WebSocket server
-        // const ws = new WebSocket('ws://your-server.com/monitoring');
-        // wsRef.current = ws;
-        
-        // Simulate WebSocket connection
-        console.log('WebSocket connecting...');
-        setIsConnected(true);
-        
-        // ws.onopen = () => {
-        //   console.log('WebSocket connected');
-        //   setIsConnected(true);
-        // };
-        // 
-        // ws.onmessage = (event) => {
-        //   const data = JSON.parse(event.data);
-        //   handleWebSocketMessage(data);
-        // };
-        // 
-        // ws.onclose = () => {
-        //   console.log('WebSocket disconnected');
-        //   setIsConnected(false);
-        //   attemptReconnect();
-        // };
-        // 
-        // ws.onerror = (error) => {
-        //   console.error('WebSocket error:', error);
-        // };
-      } catch (error) {
-        console.error('WebSocket connection error:', error);
-        setIsConnected(false);
-      }
-    };
+const isAllowedStream = (url) => {
+    if (!url) return false;
+    const lower = url.toLowerCase();
+    return lower.startsWith('http://') || lower.startsWith('https://') || lower.includes('.m3u8');
+};
 
-    connectWebSocket();
+const LiveMonitoring = () => {
+    const { data: camerasData, loading: camerasLoading, error: camerasError, refetch } = useFetch('/cameras', { immediate: true });
+    const [cameras, setCameras] = useState([]);
+    const [onlineCameras, setOnlineCameras] = useState([]);
+    const [selectedCamera, setSelectedCamera] = useState(null);
+    const [isStreaming, setIsStreaming] = useState(false);
+    const [error, setError] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [streamType, setStreamType] = useState('unknown');
+    const [mjpegInterval, setMjpegInterval] = useState(null);
+    const [latestSnapshot, setLatestSnapshot] = useState(null);
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    const [streamError, setStreamError] = useState(false); // tracks if stream has failed
 
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-    };
-  }, []);
+    const videoRef = useRef(null);
+    const imgRef = useRef(null);
+    const containerRef = useRef(null);
+    const isMounted = useRef(true);
 
-  // Auto-reconnect
-  const attemptReconnect = useCallback(() => {
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-    }
-    
-    reconnectTimeoutRef.current = setTimeout(() => {
-      console.log('Attempting to reconnect...');
-      // WebSocket reconnection logic
-    }, 5000);
-  }, []);
+    useEffect(() => {
+        return () => {
+            isMounted.current = false;
+            stopStream();
+        };
+    }, []);
 
-  // Handle WebSocket messages
-  const handleWebSocketMessage = useCallback((message) => {
-    switch (message.type) {
-      case 'device_update':
-        updateDevice(message.data);
-        break;
-      case 'metric_update':
-        updateMetric(message.data);
-        break;
-      case 'alert':
-        addAlert(message.data);
-        break;
-      case 'status_change':
-        updateStatus(message.data);
-        break;
-      default:
-        console.log('Unknown message type:', message.type);
-    }
-  }, []);
-
-  // Update device
-  const updateDevice = useCallback((deviceData) => {
-    setMonitoringData(prev => {
-      const devices = prev.devices || [];
-      const index = devices.findIndex(d => d.id === deviceData.id);
-      
-      let updatedDevices;
-      if (index >= 0) {
-        updatedDevices = [...devices];
-        updatedDevices[index] = { ...updatedDevices[index], ...deviceData };
-      } else {
-        updatedDevices = [...devices, deviceData];
-      }
-      
-      return { ...prev, devices: updatedDevices };
-    });
-  }, []);
-
-  // Update metric
-  const updateMetric = useCallback((metricData) => {
-    setMonitoringData(prev => ({
-      ...prev,
-      metrics: { ...prev.metrics, ...metricData }
-    }));
-    
-    // Add to history
-    const newHistory = {
-      timestamp: new Date(),
-      ...metricData
-    };
-    
-    setHistory(prev => {
-      const updated = [newHistory, ...prev];
-      return updated.slice(0, maxHistoryPoints);
-    });
-  }, [maxHistoryPoints]);
-
-  // Add alert
-  const addAlert = useCallback((alertData) => {
-    const newAlert = {
-      id: `alert-${Date.now()}`,
-      timestamp: new Date(),
-      acknowledged: false,
-      ...alertData
-    };
-    
-    setAlerts(prev => [newAlert, ...prev]);
-    
-    // Show notification if browser supports it
-    if (alertData.priority === 'critical' && 'Notification' in window) {
-      Notification.requestPermission().then(permission => {
-        if (permission === 'granted') {
-          new Notification('Critical Alert!', {
-            body: alertData.message,
-            icon: '🚨'
-          });
+    const stopStream = useCallback(() => {
+        if (mjpegInterval) {
+            clearInterval(mjpegInterval);
+            setMjpegInterval(null);
         }
-      });
-    }
-    
-    // Trigger alert sound for critical alerts
-    if (alertData.priority === 'critical') {
-      // In a real app, you would play an alert sound
-      // playAlertSound();
-    }
-  }, []);
+        if (videoRef.current) {
+            videoRef.current.src = '';
+            videoRef.current.load();
+            videoRef.current.style.display = 'none';
+        }
+        if (imgRef.current) {
+            imgRef.current.src = '';
+            imgRef.current.style.display = 'none';
+        }
+        setIsStreaming(false);
+        setStreamError(false);
+        setError('');
+    }, [mjpegInterval]);
 
-  // Update status
-  const updateStatus = useCallback((statusData) => {
-    setStatus(prev => ({ ...prev, ...statusData }));
-  }, []);
+    const startStream = useCallback(async () => {
+        if (!selectedCamera) {
+            toast.error('No camera selected');
+            return;
+        }
 
-  // Simulate data updates
-  useEffect(() => {
-    if (!onDataUpdate) return;
-    
-    intervalRef.current = setInterval(() => {
-      // Simulate real-time data updates
-      onDataUpdate({
-        timestamp: new Date(),
-        data: monitoringData,
-      });
-      
-      setLastUpdate(new Date());
-    }, updateInterval);
-    
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
+        const url = selectedCamera.streamUrl_encrypted;
+        if (!url) {
+            setError('No stream URL configured for this camera');
+            toast.error('No stream URL');
+            return;
+        }
+
+        if (!isAllowedStream(url) && !url.startsWith('0')) {
+            setError('Unsupported stream protocol. Only HTTP/HTTPS is supported.');
+            toast.error('Unsupported protocol');
+            return;
+        }
+
+        setIsLoading(true);
+        setError('');
+        setStreamError(false);
+
+        try {
+            stopStream();
+
+            const type = guessStreamType(url);
+            setStreamType(type);
+
+            if (type === 'mjpeg' || isMJPEG(url)) {
+                if (imgRef.current) {
+                    imgRef.current.crossOrigin = 'anonymous';
+                    imgRef.current.style.display = 'block';
+
+                    // Load image with error handling
+                    const loadImage = () => {
+                        if (!isMounted.current) return;
+                        const imgUrl = getCacheBustUrl(url);
+                        imgRef.current.src = imgUrl;
+                    };
+
+                    // Set onerror once
+                    imgRef.current.onerror = () => {
+                        if (!isMounted.current) return;
+                        setStreamError(true);
+                        setError('MJPEG stream error – camera unreachable or URL invalid.');
+                        toast.error('MJPEG stream failed');
+                        // Stop the interval
+                        if (mjpegInterval) {
+                            clearInterval(mjpegInterval);
+                            setMjpegInterval(null);
+                        }
+                        setIsStreaming(false);
+                        // Replace with placeholder
+                        if (imgRef.current) {
+                            imgRef.current.src = '';
+                            imgRef.current.alt = 'Stream unavailable';
+                        }
+                    };
+
+                    imgRef.current.onload = () => {
+                        if (!isMounted.current) return;
+                        setStreamError(false);
+                        setIsStreaming(true);
+                        setError('');
+                    };
+
+                    loadImage();
+
+                    // Refresh every 2 seconds if no error
+                    const interval = setInterval(() => {
+                        if (isMounted.current && !streamError && imgRef.current) {
+                            imgRef.current.src = getCacheBustUrl(url);
+                        }
+                    }, 2000);
+                    setMjpegInterval(interval);
+                }
+            } else if (type === 'hls' || type === 'mp4') {
+                if (videoRef.current) {
+                    videoRef.current.crossOrigin = 'anonymous';
+                    videoRef.current.src = url;
+                    videoRef.current.style.display = 'block';
+                    videoRef.current
+                        .play()
+                        .then(() => {
+                            setIsStreaming(true);
+                            setError('');
+                        })
+                        .catch((err) => {
+                            setStreamError(true);
+                            setError(`Video play error: ${err.message}`);
+                            toast.error('Video stream error');
+                        });
+                    videoRef.current.onerror = () => {
+                        setStreamError(true);
+                        setError('Video stream error – check URL or format.');
+                        toast.error('Video stream error');
+                    };
+                }
+            } else {
+                // fallback: try as video
+                if (videoRef.current) {
+                    videoRef.current.crossOrigin = 'anonymous';
+                    videoRef.current.src = url;
+                    videoRef.current.style.display = 'block';
+                    videoRef.current
+                        .play()
+                        .then(() => {
+                            setIsStreaming(true);
+                            setError('');
+                        })
+                        .catch((err) => {
+                            setStreamError(true);
+                            setError(`Playback error: ${err.message}`);
+                            toast.error('Stream playback error');
+                        });
+                    videoRef.current.onerror = () => {
+                        setStreamError(true);
+                        setError('Stream error – check URL.');
+                        toast.error('Stream error');
+                    };
+                }
+            }
+
+            if (!streamError) {
+                toast.success(`Streaming: ${selectedCamera.name}`);
+            }
+        } catch (err) {
+            setError(`Failed to start stream: ${err.message}`);
+            toast.error(`Failed: ${err.message}`);
+            setStreamError(true);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [selectedCamera, stopStream, mjpegInterval, streamError]);
+
+    const handleCameraSelect = (cam) => {
+        if (isStreaming) stopStream();
+        setSelectedCamera(cam);
+        setStreamError(false);
+        // Start after a short delay to allow state update
+        setTimeout(() => startStream(), 200);
     };
-  }, [onDataUpdate, monitoringData, updateInterval]);
 
-  // Alert handlers
-  const handleAcknowledgeAlert = useCallback((alertId) => {
-    setAlerts(prev => 
-      prev.map(alert => 
-        alert.id === alertId 
-          ? { ...alert, acknowledged: true } 
-          : alert
-      )
-    );
-    onAlertAcknowledge?.(alertId);
-  }, [onAlertAcknowledge]);
+    const takeSnapshot = () => {
+        if (!isStreaming || streamError) {
+            toast.error('No active stream');
+            return;
+        }
 
-  const handleExpandAlert = useCallback((alertId) => {
-    setExpandedAlerts(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(alertId)) {
-        newSet.delete(alertId);
-      } else {
-        newSet.add(alertId);
-      }
-      return newSet;
-    });
-  }, []);
+        try {
+            let sourceElement = null;
+            let width = 0,
+                height = 0;
 
-  const handleClearAlerts = useCallback(() => {
-    setAlerts(prev => prev.filter(alert => alert.acknowledged));
-  }, []);
+            if (streamType === 'mjpeg' && imgRef.current && imgRef.current.complete && imgRef.current.naturalWidth > 0) {
+                sourceElement = imgRef.current;
+                width = sourceElement.naturalWidth;
+                height = sourceElement.naturalHeight;
+            } else if (videoRef.current && videoRef.current.videoWidth > 0) {
+                sourceElement = videoRef.current;
+                width = sourceElement.videoWidth;
+                height = sourceElement.videoHeight;
+            } else {
+                if (imgRef.current && imgRef.current.style.display !== 'none' && imgRef.current.complete) {
+                    sourceElement = imgRef.current;
+                    width = imgRef.current.naturalWidth || 640;
+                    height = imgRef.current.naturalHeight || 480;
+                } else if (videoRef.current && videoRef.current.style.display !== 'none') {
+                    sourceElement = videoRef.current;
+                    width = videoRef.current.videoWidth || 640;
+                    height = videoRef.current.videoHeight || 480;
+                } else {
+                    toast.error('No visible stream source');
+                    return;
+                }
+            }
 
-  const handleClearAllAlerts = useCallback(() => {
-    setAlerts([]);
-  }, []);
+            if (!sourceElement || width === 0 || height === 0) {
+                toast.error('Invalid stream source dimensions');
+                return;
+            }
 
-  // Device control handler
-  const handleDeviceControl = useCallback((deviceId, action, params = {}) => {
-    onDeviceControl?.(deviceId, action, params);
-  }, [onDeviceControl]);
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                toast.error('Canvas context not available');
+                return;
+            }
 
-  // Search handler
-  const handleSearch = useCallback((e) => {
-    setSearchTerm(e.target.value);
-  }, []);
+            ctx.drawImage(sourceElement, 0, 0, width, height);
 
-  // Filter handler
-  const handleFilterChange = useCallback((key, value) => {
-    setFilters(prev => ({ ...prev, [key]: value }));
-  }, []);
-
-  // Manual refresh
-  const handleRefresh = useCallback(() => {
-    onRefresh?.();
-    setLastUpdate(new Date());
-  }, [onRefresh]);
-
-  // Export data
-  const handleExport = useCallback((format = 'json') => {
-    onExport?.({
-      format,
-      data: monitoringData,
-      alerts,
-      history,
-    });
-  }, [monitoringData, alerts, history, onExport]);
-
-  // Format time
-  const formatTime = useCallback((date) => {
-    if (!date) return '';
-    const d = new Date(date);
-    return d.toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  }, []);
-
-  // Format date
-  const formatDate = useCallback((date) => {
-    if (!date) return '';
-    const d = new Date(date);
-    return d.toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  }, []);
-
-  // Get status color
-  const getStatusColor = useCallback((status) => {
-    return statusColors[status] || '#9E9E9E';
-  }, [statusColors]);
-
-  // Get alert priority color
-  const getAlertPriorityColor = useCallback((priority) => {
-    const colors = {
-      critical: statusColors.critical,
-      warning: statusColors.warning,
-      info: statusColors.info,
+            try {
+                const imageData = canvas.toDataURL('image/jpeg');
+                setLatestSnapshot(imageData);
+                toast.success('📸 Snapshot captured');
+            } catch (exportErr) {
+                if (exportErr.message.includes('Tainted')) {
+                    toast.error(
+                        'Cannot capture snapshot: CORS issue. The stream source does not allow cross-origin access.'
+                    );
+                } else {
+                    toast.error(`Export failed: ${exportErr.message}`);
+                }
+                console.error('Export error:', exportErr);
+            }
+        } catch (err) {
+            console.error('Snapshot error:', err);
+            toast.error(`Snapshot failed: ${err.message}`);
+        }
     };
-    return colors[priority] || statusColors.info;
-  }, [statusColors]);
 
-  // Render device card
-  const renderDeviceCardItem = useCallback((device) => {
-    if (renderDeviceCard) {
-      return renderDeviceCard(device, {
-        onSelect: () => onDeviceSelect?.(device.id),
-        onControl: (action, params) => handleDeviceControl(device.id, action, params),
-        isSelected: selectedDevice?.id === device.id,
-      });
+    const toggleFullscreen = () => {
+        if (!containerRef.current) return;
+        if (!document.fullscreenElement) {
+            containerRef.current.requestFullscreen().catch((err) => {
+                toast.error('Fullscreen not supported');
+            });
+            setIsFullscreen(true);
+        } else {
+            document.exitFullscreen();
+            setIsFullscreen(false);
+        }
+    };
+
+    useEffect(() => {
+        const handleFullscreenChange = () => {
+            setIsFullscreen(!!document.fullscreenElement);
+        };
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    }, []);
+
+    // Auto-start when selectedCamera changes (if already selected)
+    useEffect(() => {
+        if (selectedCamera) {
+            startStream();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedCamera]);
+
+    // ─── Render ──────────────────────────────────────────────────
+    if (camerasLoading) {
+        return (
+            <div className="flex items-center justify-center h-full min-h-[400px]">
+                <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent" />
+            </div>
+        );
     }
 
-    const statusColor = getStatusColor(device.status);
-
-    return (
-      <div 
-        key={device.id}
-        className={`device-card ${selectedDevice?.id === device.id ? 'selected' : ''}`}
-        onClick={() => {
-          setSelectedDevice(device);
-          onDeviceSelect?.(device.id);
-        }}
-        style={{ borderLeftColor: statusColor }}
-      >
-        <div className="device-card-header">
-          <div className="device-icon">
-            {device.icon || '📡'}
-          </div>
-          <div className="device-info">
-            <h4 className="device-name">{device.name}</h4>
-            <span className="device-type">{device.type}</span>
-          </div>
-          <div 
-            className={`device-status ${device.status}`}
-            style={{ backgroundColor: statusColor }}
-          >
-            <span className="status-dot"></span>
-            {device.status}
-          </div>
-        </div>
-        
-        <div className="device-card-body">
-          {device.location && (
-            <div className="device-location">
-              📍 {device.location}
-            </div>
-          )}
-          {device.metrics && (
-            <div className="device-metrics">
-              {Object.entries(device.metrics).map(([key, value]) => (
-                <div key={key} className="device-metric">
-                  <span className="metric-label">{key}</span>
-                  <span className="metric-value">{value}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        
-        {showControls && (
-          <div className="device-card-actions">
-            <button 
-              className="control-btn view-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedDevice(device);
-                onDeviceSelect?.(device.id);
-              }}
-            >
-              View Details
-            </button>
-            {device.status === 'online' && (
-              <>
-                <button 
-                  className="control-btn control-btn-primary"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeviceControl(device.id, 'restart');
-                  }}
-                >
-                  🔄 Restart
+    if (camerasError) {
+        return (
+            <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-red-500 p-4">
+                <AlertCircle className="w-12 h-12 mb-2" />
+                <p>Failed to load cameras: {camerasError}</p>
+                <button onClick={refetch} className="mt-3 px-4 py-2 bg-primary/20 text-primary rounded-lg">
+                    Retry
                 </button>
-                <button 
-                  className="control-btn control-btn-danger"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeviceControl(device.id, 'shutdown');
-                  }}
-                >
-                  ⏻ Shutdown
+            </div>
+        );
+    }
+
+    if (cameras.length === 0) {
+        return (
+            <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-gray-400 p-4">
+                <Camera className="w-16 h-16 mb-2 text-gray-600" />
+                <p>No cameras configured</p>
+                <button onClick={() => (window.location.href = '/cameras')} className="mt-3 px-4 py-2 bg-primary/20 text-primary rounded-lg">
+                    Go to Cameras
                 </button>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  }, [
-    selectedDevice, renderDeviceCard, onDeviceSelect,
-    handleDeviceControl, getStatusColor, showControls
-  ]);
-
-  // Render metric
-  const renderMetricItem = useCallback((metric) => {
-    if (renderMetric) {
-      return renderMetric(metric);
+            </div>
+        );
     }
 
-    const value = metricsData[metric.key];
-    const threshold = alertThresholds[metric.priority] || 50;
-    const isCritical = value > threshold;
-    const status = isCritical ? 'critical' : 'normal';
-
-    return (
-      <div 
-        key={metric.key}
-        className={`metric-item metric-${status}`}
-        onClick={() => {
-          setSelectedMetric(metric);
-          onMetricClick?.(metric);
-        }}
-      >
-        <div className="metric-header">
-          <span className="metric-icon">{metric.icon || '📊'}</span>
-          <span className="metric-name">{metric.label}</span>
-        </div>
-        <div className="metric-value-display">
-          <span className="metric-current">{value}</span>
-          <span className="metric-unit">{metric.unit || ''}</span>
-        </div>
-        <div className="metric-progress">
-          <div 
-            className="metric-progress-bar"
-            style={{
-              width: `${Math.min((value / threshold) * 100, 100)}%`,
-              backgroundColor: isCritical ? statusColors.critical : statusColors.online
-            }}
-          />
-        </div>
-        <div className="metric-threshold">
-          <span>Threshold: {threshold}</span>
-          <span className={`metric-status ${status}`}>
-            {isCritical ? '⚠️ Critical' : '✅ Normal'}
-          </span>
-        </div>
-      </div>
-    );
-  }, [metricsData, alertThresholds, statusColors, onMetricClick, renderMetric]);
-
-  // Render alert
-  const renderAlertItem = useCallback((alert) => {
-    if (renderAlert) {
-      return renderAlert(alert, {
-        onAcknowledge: () => handleAcknowledgeAlert(alert.id),
-        onExpand: () => handleExpandAlert(alert.id),
-        isExpanded: expandedAlerts.has(alert.id),
-      });
+    if (onlineCameras.length === 0) {
+        return (
+            <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-yellow-400 p-4">
+                <VideoOff className="w-16 h-16 mb-2" />
+                <p>No online cameras available</p>
+                <p className="text-sm text-gray-400">Please check your camera connections</p>
+                <button onClick={() => (window.location.href = '/cameras')} className="mt-3 px-4 py-2 bg-primary/20 text-primary rounded-lg">
+                    Manage Cameras
+                </button>
+            </div>
+        );
     }
 
-    const priorityColor = getAlertPriorityColor(alert.priority);
-    const isExpanded = expandedAlerts.has(alert.id);
-
     return (
-      <div 
-        key={alert.id}
-        className={`alert-item alert-${alert.priority} ${alert.acknowledged ? 'acknowledged' : ''}`}
-        style={{ borderLeftColor: priorityColor }}
-      >
-        <div className="alert-header">
-          <div className="alert-icon">
-            {alert.priority === 'critical' && '🚨'}
-            {alert.priority === 'warning' && '⚠️'}
-            {alert.priority === 'info' && 'ℹ️'}
-          </div>
-          <div className="alert-info">
-            <span className="alert-title">{alert.title}</span>
-            <span className="alert-time">{formatTime(alert.timestamp)}</span>
-          </div>
-          <div className="alert-actions">
-            {!alert.acknowledged && (
-              <button 
-                className="acknowledge-btn"
-                onClick={() => handleAcknowledgeAlert(alert.id)}
-              >
-                ✓ Acknowledge
-              </button>
-            )}
-            <button 
-              className="expand-btn"
-              onClick={() => handleExpandAlert(alert.id)}
-            >
-              {isExpanded ? '▲' : '▼'}
-            </button>
-          </div>
-        </div>
-        
-        <div className="alert-message">
-          {alert.message}
-        </div>
-        
-        {isExpanded && alert.details && (
-          <div className="alert-details">
-            {Object.entries(alert.details).map(([key, value]) => (
-              <div key={key} className="alert-detail-item">
-                <span className="detail-label">{key}</span>
-                <span className="detail-value">{value}</span>
-              </div>
-            ))}
-          </div>
-        )}
-        
-        {alert.acknowledged && (
-          <div className="alert-acknowledged">
-            ✅ Acknowledged
-          </div>
-        )}
-      </div>
-    );
-  }, [
-    expandedAlerts, formatTime, getAlertPriorityColor,
-    handleAcknowledgeAlert, handleExpandAlert, renderAlert
-  ]);
-
-  // Render chart
-  const renderChartComponent = useCallback(() => {
-    if (renderChart) {
-      return renderChart({
-        data: history,
-        metrics: metricsData,
-        status: statusData,
-      });
-    }
-
-    if (!showCharts || history.length === 0) return null;
-
-    return (
-      <div className="monitoring-chart">
-        <div className="chart-header">
-          <h4>Real-time History</h4>
-          <span className="chart-points">{history.length} data points</span>
-        </div>
-        <div className="chart-container">
-          <svg viewBox="0 0 800 200" className="history-chart">
-            {history.map((point, index) => {
-              const x = (index / history.length) * 800;
-              // Find the first metric value
-              const metricKey = Object.keys(point).find(k => k !== 'timestamp');
-              const value = metricKey ? point[metricKey] : 0;
-              const y = 200 - (value / 100) * 180;
-              return (
-                <circle
-                  key={index}
-                  cx={x}
-                  cy={y}
-                  r={3}
-                  fill={statusColors.online}
-                  opacity={0.8}
-                />
-              );
-            })}
-            <polyline
-              points={history.map((point, index) => {
-                const x = (index / history.length) * 800;
-                const metricKey = Object.keys(point).find(k => k !== 'timestamp');
-                const value = metricKey ? point[metricKey] : 0;
-                const y = 200 - (value / 100) * 180;
-                return `${x},${y}`;
-              }).join(' ')}
-              fill="none"
-              stroke={statusColors.online}
-              strokeWidth="2"
-            />
-          </svg>
-        </div>
-        <div className="chart-footer">
-          <span>Last update: {formatTime(lastUpdate)}</span>
-          <span className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
-            {isConnected ? '🟢 Live' : '🔴 Disconnected'}
-          </span>
-        </div>
-      </div>
-    );
-  }, [history, metricsData, statusData, showCharts, statusColors, lastUpdate, isConnected, formatTime, renderChart]);
-
-  // Effects - Auto-scroll alerts
-  useEffect(() => {
-    if (autoScroll && alertRef.current) {
-      alertRef.current.scrollTop = 0;
-    }
-  }, [alerts, autoScroll]);
-
-  // Effects - Cleanup
-  useEffect(() => {
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-    };
-  }, []);
-
-  // Render loading state
-  if (isLoading) {
-    if (renderLoadingState) return renderLoadingState();
-    return (
-      <div className="monitoring-loading">
-        <div className="loading-spinner"></div>
-        <p>Connecting to monitoring system...</p>
-      </div>
-    );
-  }
-
-  // Render error state
-  if (error) {
-    if (renderErrorState) return renderErrorState(error);
-    return (
-      <div className="monitoring-error">
-        <span className="error-icon">⚠️</span>
-        <p>{error}</p>
-        <button onClick={handleRefresh}>Retry</button>
-      </div>
-    );
-  }
-
-  // Render empty state
-  if (!monitoringData || Object.keys(monitoringData).length === 0) {
-    if (renderEmptyState) return renderEmptyState();
-    return (
-      <div className="monitoring-empty">
-        <span className="empty-icon">📡</span>
-        <h3>No Monitoring Data</h3>
-        <p>Waiting for data from monitoring system...</p>
-        <button className="refresh-btn" onClick={handleRefresh}>
-          Refresh
-        </button>
-      </div>
-    );
-  }
-
-  // Main render
-  return (
-    <div 
-      className={`monitoring-container monitoring-${theme} ${className}`}
-      style={style}
-    >
-      {/* Header */}
-      <div className="monitoring-header">
-        <div className="monitoring-header-left">
-          <h2 className="monitoring-title">Live Monitoring</h2>
-          <div className="monitoring-status-summary">
-            <span className={`status-badge ${isConnected ? 'connected' : 'disconnected'}`}>
-              {isConnected ? '🟢 Live' : '🔴 Disconnected'}
-            </span>
-            <span className="last-update">
-              Updated: {formatTime(lastUpdate)}
-            </span>
-          </div>
-        </div>
-        
-        <div className="monitoring-header-right">
-          {showSearch && (
-            <div className="monitoring-search">
-              <input
-                type="text"
-                placeholder="Search devices..."
-                value={searchTerm}
-                onChange={handleSearch}
-                className="search-input"
-              />
-              <span className="search-icon">🔍</span>
-            </div>
-          )}
-          
-          <button 
-            className="refresh-btn"
-            onClick={handleRefresh}
-            title="Refresh data"
-          >
-            🔄
-          </button>
-          
-          <button 
-            className="export-btn"
-            onClick={() => handleExport('json')}
-            title="Export data"
-          >
-            📤
-          </button>
-          
-          {renderControls && renderControls({
-            onRefresh: handleRefresh,
-            onExport: handleExport,
-            isConnected,
-            lastUpdate,
-          })}
-        </div>
-      </div>
-
-      {/* Status Grid */}
-      {showStatusGrid && Object.keys(statusData).length > 0 && (
-        <div className="status-grid">
-          {Object.entries(statusData).map(([key, value]) => (
-            <div 
-              key={key}
-              className="status-item"
-              onClick={() => onStatusClick?.(key, value)}
-            >
-              <span className="status-label">{key}</span>
-              <span 
-                className="status-value"
-                style={{ color: getStatusColor(value.status) }}
-              >
-                {value.value || value.status || value}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Alert Summary */}
-      {showAlerts && (
-        <div className="alert-summary">
-          <div className="alert-summary-header">
-            <h4>Alerts</h4>
-            <div className="alert-counts">
-              {alertCounts.critical > 0 && (
-                <span className="alert-count critical">
-                  🔴 {alertCounts.critical} Critical
-                </span>
-              )}
-              {alertCounts.warning > 0 && (
-                <span className="alert-count warning">
-                  🟡 {alertCounts.warning} Warning
-                </span>
-              )}
-              {alertCounts.info > 0 && (
-                <span className="alert-count info">
-                  🔵 {alertCounts.info} Info
-                </span>
-              )}
-            </div>
-            <div className="alert-actions-bulk">
-              <button 
-                className="clear-alerts-btn"
-                onClick={handleClearAlerts}
-                disabled={alerts.filter(a => a.acknowledged).length === 0}
-              >
-                Clear Acknowledged
-              </button>
-              <button 
-                className="clear-all-alerts-btn"
-                onClick={handleClearAllAlerts}
-                disabled={alerts.length === 0}
-              >
-                Clear All
-              </button>
-            </div>
-          </div>
-          
-          <div className="alert-list" ref={alertRef}>
-            {alerts.length > 0 ? (
-              alerts.map(alert => renderAlertItem(alert))
-            ) : (
-              <div className="no-alerts">
-                <span>✅ No alerts</span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Main Content */}
-      <div className="monitoring-content">
-        {/* Devices Grid */}
-        <div className="devices-section">
-          {showFilters && (
-            <div className="devices-filters">
-              <select
-                value={filters.status}
-                onChange={(e) => handleFilterChange('status', e.target.value)}
-                className="filter-select"
-              >
-                <option value="">All Status</option>
-                <option value="online">Online</option>
-                <option value="offline">Offline</option>
-                <option value="warning">Warning</option>
-                <option value="error">Error</option>
-              </select>
-              
-              <select
-                value={filters.type}
-                onChange={(e) => handleFilterChange('type', e.target.value)}
-                className="filter-select"
-              >
-                <option value="">All Types</option>
-                <option value="sensor">Sensor</option>
-                <option value="actuator">Actuator</option>
-                <option value="gateway">Gateway</option>
-                <option value="device">Device</option>
-              </select>
-              
-              <select
-                value={filters.priority}
-                onChange={(e) => handleFilterChange('priority', e.target.value)}
-                className="filter-select"
-              >
-                <option value="">All Priority</option>
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
-              </select>
-            </div>
-          )}
-          
-          <div className="devices-grid">
-            {filteredDevices.length > 0 ? (
-              filteredDevices.map(device => renderDeviceCardItem(device))
-            ) : (
-              <div className="no-devices">
-                <span>📭 No devices found</span>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Sidebar - Metrics and Charts */}
-        <div className="monitoring-sidebar">
-          {/* Metrics */}
-          {showMetrics && Object.keys(metricsData).length > 0 && (
-            <div className="metrics-section">
-              <h4>Key Metrics</h4>
-              <div className="metrics-grid">
-                {Object.entries(metricsData).map(([key, value]) => {
-                  const metric = {
-                    key,
-                    label: key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()),
-                    value,
-                    unit: '',
-                    priority: 'info',
-                    icon: '📊',
-                  };
-                  return renderMetricItem(metric);
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Charts */}
-          {renderChartComponent()}
-
-          {/* Children */}
-          {children && (
-            <div className="monitoring-children">
-              {children}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Device Detail Modal */}
-      {selectedDevice && (
-        <div className="device-detail-modal" onClick={() => setSelectedDevice(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>{selectedDevice.name}</h3>
-              <button className="modal-close" onClick={() => setSelectedDevice(null)}>
-                ×
-              </button>
-            </div>
-            <div className="modal-body">
-              <div className="device-detail-grid">
-                <div className="detail-item">
-                  <span className="detail-label">ID</span>
-                  <span className="detail-value">{selectedDevice.id}</span>
+        <div className="h-full flex flex-col bg-gray-950 p-4 md:p-6 overflow-hidden" ref={containerRef}>
+            {/* ─── Top Bar ─────────────────────────────────────────────── */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4 shrink-0">
+                <div className="flex items-center gap-2">
+                    <Camera className="w-6 h-6 text-primary" />
+                    <h1 className="text-xl md:text-2xl font-bold text-white truncate">Live Monitoring</h1>
+                    {selectedCamera && (
+                        <span className="text-sm text-gray-400 hidden sm:inline">
+                            • {selectedCamera.name}
+                        </span>
+                    )}
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">Type</span>
-                  <span className="detail-value">{selectedDevice.type}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Status</span>
-                  <span 
-                    className="detail-value"
-                    style={{ color: getStatusColor(selectedDevice.status) }}
-                  >
-                    {selectedDevice.status}
-                  </span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Location</span>
-                  <span className="detail-value">{selectedDevice.location || 'N/A'}</span>
-                </div>
-              </div>
-              {selectedDevice.metrics && (
-                <div className="device-metrics-detail">
-                  <h4>Metrics</h4>
-                  <div className="metrics-detail-grid">
-                    {Object.entries(selectedDevice.metrics).map(([key, value]) => (
-                      <div key={key} className="metric-detail-item">
-                        <span className="metric-detail-label">{key}</span>
-                        <span className="metric-detail-value">{value}</span>
-                      </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                    {onlineCameras.map((cam) => (
+                        <button
+                            key={cam._id}
+                            onClick={() => handleCameraSelect(cam)}
+                            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${selectedCamera?._id === cam._id
+                                    ? 'bg-primary text-white'
+                                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                                }`}
+                        >
+                            {cam.name}
+                        </button>
                     ))}
-                  </div>
+                    <button
+                        onClick={() => (window.location.href = '/cameras')}
+                        className="px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors flex items-center gap-1"
+                    >
+                        <Plus className="w-4 h-4" />
+                        <span className="hidden sm:inline">Add</span>
+                    </button>
+                    <button
+                        onClick={isStreaming && !streamError ? stopStream : startStream}
+                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1 ${isStreaming && !streamError
+                                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                                : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                            }`}
+                        disabled={isLoading}
+                    >
+                        {isLoading ? (
+                            <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : isStreaming && !streamError ? (
+                            <Pause className="w-4 h-4" />
+                        ) : (
+                            <Play className="w-4 h-4" />
+                        )}
+                        <span className="hidden sm:inline">
+                            {isStreaming && !streamError ? 'Stop' : 'Start'}
+                        </span>
+                    </button>
                 </div>
-              )}
             </div>
-          </div>
+
+            {error && (
+                <div className="bg-red-500/10 border border-red-500/30 text-red-500 p-3 rounded-lg text-sm mb-4 shrink-0">
+                    ⚠️ {error}
+                    {streamError && (
+                        <button
+                            onClick={startStream}
+                            className="ml-3 text-primary hover:underline"
+                        >
+                            Retry
+                        </button>
+                    )}
+                </div>
+            )}
+
+            {/* ─── Video + Snapshot ───────────────────────────────────── */}
+            <div className="flex-1 min-h-0 flex gap-4">
+                {/* Video Container */}
+                <div className="flex-1 relative bg-black rounded-xl overflow-hidden border border-gray-800 aspect-video max-h-[calc(100vh-240px)]">
+                    <video
+                        ref={videoRef}
+                        crossOrigin="anonymous"
+                        autoPlay
+                        playsInline
+                        muted={streamType === 'webcam' ? false : true}
+                        className="w-full h-full object-contain"
+                        style={{ display: streamType === 'mjpeg' ? 'none' : 'block' }}
+                    />
+                    <img
+                        ref={imgRef}
+                        crossOrigin="anonymous"
+                        alt="MJPEG stream"
+                        className="w-full h-full object-contain"
+                        style={{ display: streamType === 'mjpeg' ? 'block' : 'none' }}
+                        onError={() => {
+                            // This is handled in startStream, but keep as backup
+                            if (!streamError) {
+                                setStreamError(true);
+                                setError('MJPEG stream error – camera unreachable.');
+                                toast.error('MJPEG stream error');
+                                if (mjpegInterval) {
+                                    clearInterval(mjpegInterval);
+                                    setMjpegInterval(null);
+                                }
+                                setIsStreaming(false);
+                            }
+                        }}
+                    />
+
+                    {(!isStreaming || streamError) && !isLoading && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500">
+                            <VideoOff className="w-16 h-16 mb-2" />
+                            <p className="text-sm">{streamError ? 'Stream unavailable' : 'No active stream'}</p>
+                            {streamError && (
+                                <button
+                                    onClick={startStream}
+                                    className="mt-3 px-4 py-2 bg-primary/20 text-primary rounded-lg hover:bg-primary/30 transition"
+                                >
+                                    Retry
+                                </button>
+                            )}
+                            {!streamError && !isStreaming && (
+                                <button
+                                    onClick={startStream}
+                                    className="mt-3 px-4 py-2 bg-primary/20 text-primary rounded-lg hover:bg-primary/30 transition"
+                                >
+                                    Start Camera
+                                </button>
+                            )}
+                        </div>
+                    )}
+                    {isLoading && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                            <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent" />
+                        </div>
+                    )}
+                    {isStreaming && !streamError && (
+                        <div className="absolute bottom-3 left-3 px-3 py-1 bg-black/60 rounded-lg text-xs text-green-400 flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                            LIVE
+                        </div>
+                    )}
+                    <button
+                        onClick={toggleFullscreen}
+                        className="absolute top-3 right-3 p-1.5 bg-black/60 rounded-lg hover:bg-black/80 transition text-gray-300 hover:text-white"
+                        title="Fullscreen"
+                    >
+                        {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                    </button>
+                </div>
+
+                {/* Snapshot Panel */}
+                <div className="w-48 bg-gray-800/50 rounded-xl overflow-hidden border border-gray-700 flex-shrink-0 hidden md:flex flex-col">
+                    <div className="p-2 text-xs text-gray-400 border-b border-gray-700">Snapshot</div>
+                    <div className="flex-1 flex items-center justify-center p-2">
+                        {latestSnapshot ? (
+                            <img src={latestSnapshot} alt="Snapshot" className="w-full object-cover rounded" />
+                        ) : (
+                            <div className="text-gray-500 text-sm text-center">No capture yet</div>
+                        )}
+                    </div>
+                    <button
+                        onClick={takeSnapshot}
+                        disabled={!isStreaming || streamError}
+                        className={`p-2 text-xs text-center border-t border-gray-700 transition ${isStreaming && !streamError
+                                ? 'text-primary hover:bg-gray-700/50 cursor-pointer'
+                                : 'text-gray-500 cursor-not-allowed'
+                            }`}
+                    >
+                        <Image className="w-4 h-4 inline mr-1" /> Capture
+                    </button>
+                </div>
+            </div>
+
+            {/* ─── Controls ────────────────────────────────────────────── */}
+            <div className="flex flex-wrap items-center gap-3 mt-4 shrink-0">
+                <button
+                    onClick={takeSnapshot}
+                    disabled={!isStreaming || streamError}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${isStreaming && !streamError
+                            ? 'bg-primary/20 text-primary hover:bg-primary/30'
+                            : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                        }`}
+                >
+                    <Image className="w-4 h-4" /> Capture Now
+                </button>
+                <button
+                    onClick={startStream}
+                    disabled={isLoading}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    <RefreshCw className="w-4 h-4" /> Reconnect
+                </button>
+
+                <div className="ml-auto flex items-center gap-2 text-sm text-gray-400">
+                    {selectedCamera ? (
+                        <>
+                            <span className="hidden sm:inline">{selectedCamera.name}</span>
+                            {isStreaming && !streamError ? (
+                                <span className="flex items-center gap-1 text-green-400">
+                                    <Wifi className="w-4 h-4" /> Online
+                                </span>
+                            ) : (
+                                <span className="flex items-center gap-1 text-red-400">
+                                    <WifiOff className="w-4 h-4" /> Offline
+                                </span>
+                            )}
+                        </>
+                    ) : (
+                        <span>No camera</span>
+                    )}
+                </div>
+            </div>
         </div>
-      )}
-    </div>
-  );
+    );
 };
 
 export default LiveMonitoring;

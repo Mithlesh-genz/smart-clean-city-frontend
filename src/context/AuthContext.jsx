@@ -1,50 +1,71 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import api from '../services/api';
 
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState(null);
+    const [user, setUser] = useState(null);
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      // Optionally fetch user profile
-      api.get('/auth/me')
-        .then(res => {
-          setUser(res.data?.data || res.data);
-          setIsAuthenticated(true);
-        })
-        .catch(() => {
-          localStorage.removeItem('token');
-          delete api.defaults.headers.common['Authorization'];
-        });
-    }
-    setLoading(false);
-  }, []);
+    useEffect(() => {
+        const token = localStorage.getItem('token');
 
-  const login = (token, userData) => {
-    localStorage.setItem('token', token);
-    api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-    setIsAuthenticated(true);
-    setUser(userData);
-  };
+        if (!token) {
+            setLoading(false);
+            setIsAuthenticated(false);
+            return;
+        }
 
-  const logout = () => {
-    localStorage.removeItem('token');
-    delete api.defaults.headers.common['Authorization'];
-    setIsAuthenticated(false);
-    setUser(null);
-  };
+        // Set auth header for verification
+        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
-  return (
-    <AuthContext.Provider value={{ isAuthenticated, loading, user, login, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
+        // Verify token with backend
+        api
+            .get('/auth/me')
+            .then((res) => {
+                const userData = res.data?.data || res.data;
+                setUser(userData);
+                setIsAuthenticated(true);
+                // Store user in localStorage for quick restore
+                localStorage.setItem('user', JSON.stringify(userData));
+            })
+            .catch((err) => {
+                // Token is invalid – clear everything
+                localStorage.removeItem('token');
+                localStorage.removeItem('user');
+                delete api.defaults.headers.common['Authorization'];
+                setIsAuthenticated(false);
+                setUser(null);
+                console.warn('Session expired or invalid token');
+            })
+            .finally(() => {
+                setLoading(false);
+            });
+    }, []);
+
+    const login = (token, userData) => {
+        localStorage.setItem('token', token);
+        localStorage.setItem('user', JSON.stringify(userData));
+        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        setUser(userData);
+        setIsAuthenticated(true);
+    };
+
+    const logout = () => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        delete api.defaults.headers.common['Authorization'];
+        setUser(null);
+        setIsAuthenticated(false);
+        window.dispatchEvent(new Event('logout'));
+    };
+
+    return (
+        <AuthContext.Provider value={{ user, isAuthenticated, loading, login, logout }}>
+            {children}
+        </AuthContext.Provider>
+    );
 };
 
 export const useAuth = () => useContext(AuthContext);

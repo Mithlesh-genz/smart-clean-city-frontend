@@ -1,227 +1,165 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
 
-// ========================================
-// useFetch Hook – Generic Data Fetching
-// ========================================
+// ─── Safe JSON stringify for cache keys ──────────────────────
+function safeStringify(obj) {
+    try {
+        return JSON.stringify(obj);
+    } catch (e) {
+        // If circular, fallback to a simple representation
+        if (e instanceof TypeError && e.message.includes('circular')) {
+            return '[circular]';
+        }
+        return '[unserializable]';
+    }
+}
+
+// ─── Filter non‑serializable values from params ──────────────
+function filterParams(params) {
+    if (!params || typeof params !== 'object') return {};
+    const filtered = {};
+    for (const [key, value] of Object.entries(params)) {
+        // Skip functions, DOM elements, and React synthetic events
+        if (
+            typeof value === 'function' ||
+            value instanceof HTMLElement ||
+            value instanceof Event ||
+            (typeof value === 'object' && value !== null && value.$$typeof) // React element
+        ) {
+            continue;
+        }
+        filtered[key] = value;
+    }
+    return filtered;
+}
+
+const cache = new Map();
 
 export const useFetch = (url, options = {}) => {
     const {
         method = 'GET',
-        params = {},
-        body = null,
+        body,
         immediate = true,
-        dependencies = [],
-        onSuccess = null,
-        onError = null,
-        transformData = null,
+        params = {},
+        onSuccess,
+        onError,
+        cacheTime = 60000,
     } = options;
 
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
-    const [status, setStatus] = useState(null);
 
-    const isMounted = useRef(true);
+    const abortControllerRef = useRef(null);
+    const paramsRef = useRef(filterParams(params));
+    const cacheKey = useRef('');
 
-    // Cleanup on unmount
+    // Update paramsRef when params changes
     useEffect(() => {
-        return () => {
-            isMounted.current = false;
-        };
-    }, []);
+        paramsRef.current = filterParams(params);
+    }, [params]);
 
     const fetchData = useCallback(
-        async (overrideParams = {}, overrideBody = null) => {
-            if (!url) return;
+        async (overrideParams = {}) => {
+            const finalParams = { ...paramsRef.current, ...filterParams(overrideParams) };
+            const key = `${method}:${url}:${safeStringify(finalParams)}`;
+            cacheKey.current = key;
+
+            // Check cache
+            if (cacheTime > 0 && cache.has(key) && (Date.now() - cache.get(key).timestamp) < cacheTime) {
+                setData(cache.get(key).data);
+                return;
+            }
+
+            // Cancel previous request
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
+            const controller = new AbortController();
+            abortControllerRef.current = controller;
 
             setLoading(true);
             setError(null);
-
             try {
-                const finalParams = { ...params, ...overrideParams };
-                const finalBody = overrideBody !== null ? overrideBody : body;
-
-                let response;
-                switch (method.toUpperCase()) {
+                let res;
+                const config = { params: finalParams, signal: controller.signal };
+                switch (method) {
                     case 'GET':
-                        response = await api.get(url, { params: finalParams });
+                        res = await api.get(url, config);
                         break;
                     case 'POST':
-                        response = await api.post(url, finalBody, { params: finalParams });
+                        res = await api.post(url, body, config);
                         break;
                     case 'PUT':
-                        response = await api.put(url, finalBody, { params: finalParams });
-                        break;
-                    case 'PATCH':
-                        response = await api.patch(url, finalBody, { params: finalParams });
+                        res = await api.put(url, body, config);
                         break;
                     case 'DELETE':
-                        response = await api.delete(url, { params: finalParams });
+                        res = await api.delete(url, config);
                         break;
                     default:
                         throw new Error(`Unsupported method: ${method}`);
                 }
-
-                // Transform data if provided
-                const result = transformData ? transformData(response) : response;
-
-                if (isMounted.current) {
-                    setData(result);
-                    setStatus('success');
-                    if (onSuccess) onSuccess(result);
+                setData(res);
+                if (cacheTime > 0) {
+                    cache.set(key, { data: res, timestamp: Date.now() });
                 }
+                if (onSuccess) onSuccess(res);
             } catch (err) {
-                if (isMounted.current) {
-                    const errorMessage = err.response?.data?.message || err.message || 'An error occurred';
-                    setError(errorMessage);
-                    setStatus('error');
-                    if (onError) onError(err);
+                // Ignore abort errors
+                if (err.name === 'AbortError' || err.code === 'ERR_CANCELED') return;
+                let msg = err.message;
+                if (err.response) {
+                    if (err.response.status === 429) msg = 'Too many requests – please wait.';
+                    else if (err.response.status === 403) msg = 'You don’t have permission.';
+                    else if (err.response.status === 401) msg = 'Please login again.';
+                    else msg = err.response.data?.message || msg;
                 }
+                setError(msg);
+                if (onError) onError(err);
             } finally {
-                if (isMounted.current) {
-                    setLoading(false);
-                }
+                setLoading(false);
+                abortControllerRef.current = null;
             }
         },
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        [url, method, JSON.stringify(params), body, transformData, onSuccess, onError]
+        [url, method, body, cacheTime, onSuccess, onError]
     );
 
-    // Auto-fetch on mount or dependency change
     useEffect(() => {
         if (immediate && url) {
             fetchData();
         }
+        return () => {
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
+        };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [immediate, url, ...dependencies]);
+    }, [immediate, url, fetchData]);
 
-    return {
-        data,
-        loading,
-        error,
-        status,
-        fetchData,
-        refetch: fetchData,
-        reset: () => {
-            setData(null);
-            setError(null);
-            setStatus(null);
-            setLoading(false);
-        },
-    };
+    return { data, loading, error, refetch: fetchData };
 };
-
-// ========================================
-// useFetchList – Paginated List Fetching
-// ========================================
-
-export const useFetchList = (url, options = {}) => {
-    const {
-        pageSize = 10,
-        initialPage = 1,
-        filters = {},
-        sortBy = 'createdAt',
-        sortOrder = 'desc',
-        ...restOptions
-    } = options;
-
-    const [page, setPage] = useState(initialPage);
-    const [total, setTotal] = useState(0);
-    const [pages, setPages] = useState(0);
-
-    const params = {
-        page,
-        limit: pageSize,
-        sortBy,
-        sortOrder,
-        ...filters,
-    };
-
-    const transformData = (response) => {
-        const { data, pagination } = response.data || response;
-        if (pagination) {
-            setTotal(pagination.total || 0);
-            setPages(pagination.pages || 0);
-        }
-        return data || [];
-    };
-
-    const { data, loading, error, fetchData, refetch } = useFetch(url, {
-        ...restOptions,
-        params,
-        transformData,
-    });
-
-    const goToPage = (newPage) => {
-        if (newPage >= 1 && newPage <= pages) {
-            setPage(newPage);
-        }
-    };
-
-    const nextPage = () => goToPage(page + 1);
-    const prevPage = () => goToPage(page - 1);
-
-    return {
-        data,
-        loading,
-        error,
-        page,
-        total,
-        pages,
-        goToPage,
-        nextPage,
-        prevPage,
-        refetch,
-        setFilters: (newFilters) => {
-            // Merge filters and reset to first page
-            Object.assign(filters, newFilters);
-            setPage(1);
-        },
-    };
-};
-
-// ========================================
-// useMutation – Data Mutation (POST/PUT/DELETE)
-// ========================================
 
 export const useMutation = (url, options = {}) => {
-    const { method = 'POST', onSuccess = null, onError = null } = options;
-
+    const { method = 'POST', onSuccess, onError } = options;
     const [loading, setLoading] = useState(false);
-    const [data, setData] = useState(null);
     const [error, setError] = useState(null);
 
     const mutate = useCallback(
-        async (payload = {}, config = {}) => {
+        async (payload, config = {}) => {
             setLoading(true);
             setError(null);
-
             try {
-                let response;
-                switch (method.toUpperCase()) {
-                    case 'POST':
-                        response = await api.post(url, payload, config);
-                        break;
-                    case 'PUT':
-                        response = await api.put(url, payload, config);
-                        break;
-                    case 'PATCH':
-                        response = await api.patch(url, payload, config);
-                        break;
-                    case 'DELETE':
-                        response = await api.delete(url, config);
-                        break;
-                    default:
-                        throw new Error(`Unsupported mutation method: ${method}`);
-                }
-
-                setData(response);
-                if (onSuccess) onSuccess(response);
-                return response;
+                const res = await api[method.toLowerCase()](url, payload, config);
+                if (onSuccess) onSuccess(res);
+                return res;
             } catch (err) {
-                const errorMessage = err.response?.data?.message || err.message || 'Mutation failed';
-                setError(errorMessage);
+                let msg = err.message;
+                if (err.response) {
+                    if (err.response.status === 429) msg = 'Too many requests – please wait.';
+                    else if (err.response.status === 403) msg = 'Permission denied.';
+                    else if (err.response.status === 401) msg = 'Please login again.';
+                }
+                setError(msg);
                 if (onError) onError(err);
                 throw err;
             } finally {
@@ -231,7 +169,5 @@ export const useMutation = (url, options = {}) => {
         [url, method, onSuccess, onError]
     );
 
-    return { mutate, loading, data, error, reset: () => { setData(null); setError(null); } };
+    return { mutate, loading, error };
 };
-
-export default useFetch;
