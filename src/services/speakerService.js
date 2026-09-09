@@ -122,7 +122,8 @@ export const speakMultipleLanguages = (distance, languages = ['en', 'hi', 'pa'])
 
     // Filter only supported (the templates object keys)
     const supported = Object.keys(templates);
-    const langs = languages.filter((l) => supported.includes(l.toLowerCase()));
+    let langs = languages.filter((l) => supported.includes(l.toLowerCase()));
+
     if (langs.length === 0) langs = ['en'];
 
     let index = 0;
