@@ -125,6 +125,7 @@ const Cameras = () => {
     const [selectedCamera, setSelectedCamera] = useState(null);
     const [streamType, setStreamType] = useState('auto');
     const [streamError, setStreamError] = useState(false);
+    const [streamActuallyWorking, setStreamActuallyWorking] = useState(false); // NEW
     const [retryKey, setRetryKey] = useState(0);
     const videoRef = useRef(null);
     const imgRef = useRef(null);
@@ -139,6 +140,14 @@ const Cameras = () => {
         confidenceThreshold: 0.7,
         status: 'ONLINE',
     });
+
+    // ─── Auto‑refresh every 30 seconds ────────────────────────────
+    useEffect(() => {
+        const interval = setInterval(() => {
+            refetch();
+        }, 30000);
+        return () => clearInterval(interval);
+    }, [refetch]);
 
     // ─── Fetch Zones ──────────────────────────────────────────────
     const fetchZones = useCallback(async (showToast = true) => {
@@ -194,12 +203,10 @@ const Cameras = () => {
     useEffect(() => {
         if (!socket || typeof socket.on !== 'function') return;
 
-        // Update camera status and show toast notification
         const handleStatusUpdate = (data) => {
             setCameras((prev) =>
                 prev.map((cam) => {
                     if (cam._id === data.cameraId) {
-                        // Show toast with new status
                         const statusText = data.newStatus === 'ONLINE' ? 'Online' : 'Offline';
                         toast.success(`📷 ${cam.name} is now ${statusText}`, {
                             icon: data.newStatus === 'ONLINE' ? '🟢' : '🔴',
@@ -307,6 +314,24 @@ const Cameras = () => {
         }
     };
 
+    // ─── Force status to ONLINE (workaround) ─────────────────────
+    const forceStatusOnline = async (cameraId) => {
+        try {
+            // Adjust endpoint if your backend uses a different path
+            await api.patch(`/cameras/${cameraId}/status`, { status: 'ONLINE' });
+            toast.success('Camera status forced to ONLINE');
+            refetch();
+            // Also update local state immediately
+            setCameras((prev) =>
+                prev.map((cam) =>
+                    cam._id === cameraId ? { ...cam, status: 'ONLINE' } : cam
+                )
+            );
+        } catch (err) {
+            toast.error('Failed to force status. Check backend endpoint.');
+        }
+    };
+
     // ─── Language change handler ──────────────────────────────────
     const handleLangChange = (e) => {
         const newLang = e.target.value;
@@ -319,6 +344,7 @@ const Cameras = () => {
         setSelectedCamera(camera);
         setStreamType('auto');
         setStreamError(false);
+        setStreamActuallyWorking(false); // reset
         setRetryKey((prev) => prev + 1);
         setLiveModalOpen(true);
     }, []);
@@ -338,6 +364,7 @@ const Cameras = () => {
 
     const handleRetryStream = useCallback(() => {
         setStreamError(false);
+        setStreamActuallyWorking(false);
         setRetryKey((prev) => prev + 1);
         toast.loading('Retrying...', { id: 'stream-retry' });
         setTimeout(() => toast.dismiss('stream-retry'), 2000);
@@ -371,6 +398,12 @@ const Cameras = () => {
         const video = videoRef.current;
         const img = imgRef.current;
 
+        // Helper to mark stream as working
+        const markWorking = () => {
+            setStreamActuallyWorking(true);
+            setStreamError(false);
+        };
+
         if (type === 'mjpeg') {
             if (img) {
                 const loadImage = () => {
@@ -378,6 +411,7 @@ const Cameras = () => {
                     img.src = url;
                     img.onerror = () => {
                         setStreamError(true);
+                        setStreamActuallyWorking(false);
                         if (mjpegIntervalRef.current) {
                             clearInterval(mjpegIntervalRef.current);
                             mjpegIntervalRef.current = null;
@@ -385,7 +419,7 @@ const Cameras = () => {
                         toast.error('MJPEG stream failed – check camera address.');
                     };
                     img.onload = () => {
-                        setStreamError(false);
+                        markWorking();
                     };
                     img.style.display = 'block';
                 };
@@ -395,6 +429,7 @@ const Cameras = () => {
                     if (!streamError) {
                         const url = getCacheBustUrl(streamUrl);
                         img.src = url;
+                        // We'll rely on onload to set working each time
                     }
                 }, 2000);
             }
@@ -410,10 +445,12 @@ const Cameras = () => {
                     hls.attachMedia(video);
                     hls.on(Hls.Events.MANIFEST_PARSED, () => {
                         video.play().catch(() => { });
+                        markWorking();
                     });
                     hls.on(Hls.Events.ERROR, (event, data) => {
                         if (data.fatal) {
                             setStreamError(true);
+                            setStreamActuallyWorking(false);
                             toast.error('HLS stream error – try switching to MJPEG.');
                         }
                     });
@@ -422,8 +459,13 @@ const Cameras = () => {
                     video.src = streamUrl;
                     video.poster = PLACEHOLDER_IMAGE;
                     video.play().catch(() => { });
+                    // If can play through, mark working
+                    video.oncanplay = () => {
+                        markWorking();
+                    };
                     video.onerror = () => {
                         setStreamError(true);
+                        setStreamActuallyWorking(false);
                         toast.error('Video stream error – try switching to MJPEG.');
                     };
                 }
@@ -517,7 +559,7 @@ const Cameras = () => {
                         </span>
                     </div>
 
-                    {/* Quick action overlay – removed manual toggle button */}
+                    {/* Quick action overlay */}
                     <div className="absolute bottom-2 left-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
                             onClick={() => {
@@ -794,13 +836,30 @@ const Cameras = () => {
                                 >
                                     {selectedCamera.status}
                                 </span>
+                                {/* NEW: Show stream working indicator */}
+                                {streamActuallyWorking && (
+                                    <span className="text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400 border border-green-500/30">
+                                        Stream Active
+                                    </span>
+                                )}
                             </h3>
-                            <button
-                                onClick={closeLiveModal}
-                                className="p-1 hover:bg-gray-800 rounded-lg"
-                            >
-                                <X className="w-6 h-6 text-gray-400" />
-                            </button>
+                            <div className="flex items-center gap-2">
+                                {/* NEW: Force online button */}
+                                {selectedCamera.status !== 'ONLINE' && (
+                                    <button
+                                        onClick={() => forceStatusOnline(selectedCamera._id)}
+                                        className="px-3 py-1 bg-yellow-500/20 text-yellow-400 rounded-lg hover:bg-yellow-500/30 text-sm flex items-center gap-1"
+                                    >
+                                        <Power className="w-3 h-3" /> Force Online
+                                    </button>
+                                )}
+                                <button
+                                    onClick={closeLiveModal}
+                                    className="p-1 hover:bg-gray-800 rounded-lg"
+                                >
+                                    <X className="w-6 h-6 text-gray-400" />
+                                </button>
+                            </div>
                         </div>
                         <div className="aspect-video bg-black rounded-lg overflow-hidden relative">
                             <img
@@ -859,9 +918,10 @@ const Cameras = () => {
                                     </button>
                                 </div>
                             )}
-                            {selectedCamera.status !== 'ONLINE' && !streamError && (
+                            {/* Show offline status only if stream not working and status offline */}
+                            {selectedCamera.status !== 'ONLINE' && !streamError && !streamActuallyWorking && (
                                 <div className="absolute top-2 left-2 bg-red-500/80 text-white px-3 py-1 rounded-lg text-sm">
-                                    Camera Offline
+                                    Camera Offline (but stream may load)
                                 </div>
                             )}
                         </div>

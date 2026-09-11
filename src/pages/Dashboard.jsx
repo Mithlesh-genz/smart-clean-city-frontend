@@ -1,10 +1,9 @@
 // frontend/src/pages/Dashboard.jsx
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useFetch } from '../hooks/useFetch';
 import { useSocket } from '../context/SocketContext';
 import { useAuth } from '../context/AuthContext';
-import StatCard from '../components/StatCard';
 import {
     speakAnnouncement,
     speakMultipleLanguages,
@@ -27,6 +26,45 @@ import {
     X,
 } from 'lucide-react';
 
+// ─── Local StatCard ──────────────────────────────────────────
+const StatCard = ({ title, value, icon: Icon, color = 'blue', subtitle }) => {
+    const colorMap = {
+        blue: 'border-blue-500/30 bg-blue-500/10',
+        green: 'border-green-500/30 bg-green-500/10',
+        yellow: 'border-yellow-500/30 bg-yellow-500/10',
+        red: 'border-red-500/30 bg-red-500/10',
+        purple: 'border-purple-500/30 bg-purple-500/10',
+        orange: 'border-orange-500/30 bg-orange-500/10',
+        teal: 'border-teal-500/30 bg-teal-500/10',
+        gray: 'border-gray-500/30 bg-gray-500/10',
+    };
+    const iconColorMap = {
+        blue: 'text-blue-400',
+        green: 'text-green-400',
+        yellow: 'text-yellow-400',
+        red: 'text-red-400',
+        purple: 'text-purple-400',
+        orange: 'text-orange-400',
+        teal: 'text-teal-400',
+        gray: 'text-gray-400',
+    };
+
+    return (
+        <div className={`rounded-xl border p-4 ${colorMap[color] || colorMap.gray}`}>
+            <div className="flex items-start justify-between">
+                <div>
+                    <p className="text-sm text-gray-400">{title}</p>
+                    <p className="text-2xl font-bold text-white mt-1">{value ?? 0}</p>
+                    {subtitle && <p className="text-xs text-gray-500 mt-1">{subtitle}</p>}
+                </div>
+                <div className={`p-2 rounded-lg bg-gray-800/50 ${iconColorMap[color] || iconColorMap.gray}`}>
+                    {Icon && <Icon className="w-5 h-5" />}
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const Dashboard = () => {
     const { isAuthenticated, loading: authLoading } = useAuth();
     const navigate = useNavigate();
@@ -34,131 +72,122 @@ const Dashboard = () => {
     const socket = socketContext?.socket || null;
     const isConnected = socketContext?.isConnected || false;
 
-    // ─── Speaker language state ──────────────────────────────
-    const [lang, setLang] = useState(localStorage.getItem('speakerLang') || 'hi');
+    // ─── Language ──────────────────────────────────────────────
+    const [lang, setLang] = useState(() => localStorage.getItem('speakerLang') || 'hi');
 
-    // ─── Redirect if not authenticated ────────────────────────────
+    // ─── Popup cooldown ──────────────────────────────────────────
+    const lastPopupTime = useRef(0);
+    const POPUP_COOLDOWN = 5000;
+
+    // ─── Redirect if not authenticated ────────────────────────
     useEffect(() => {
-        if (!authLoading && !isAuthenticated && window.location.pathname !== '/login') {
+        if (!authLoading && !isAuthenticated) {
             navigate('/login', { replace: true });
         }
     }, [isAuthenticated, authLoading, navigate]);
 
-    // ─── Fetch main stats ──────────────────────────────────────────
+    // ─── API calls – only for endpoints that exist ────────────
     const { data: statsData, loading: statsLoading, error: statsError, refetch: refetchStats } =
         useFetch('/dashboard/stats', {
             immediate: true,
             cacheTime: 5000,
-            onError: () => toast.error('Failed to load dashboard data'),
+            onError: () => toast.error('Failed to load dashboard stats'),
         });
 
     const { data: realtimeData, refetch: refetchRealtime } = useFetch('/dashboard/realtime', {
         immediate: true,
         refetchInterval: 10000,
+        onError: () => console.warn('Realtime fetch failed – using fallback'),
     });
 
-    const { data: trendsData } = useFetch('/dashboard/trends?period=week', {
-        immediate: true,
-    });
+    // ─── Memoised data ──────────────────────────────────────────
+    const stats = useMemo(() => statsData?.data || statsData || {}, [statsData]);
+    const realtime = useMemo(() => realtimeData?.data || realtimeData || {}, [realtimeData]);
 
-    const { data: activityData } = useFetch('/dashboard/recent-activity?limit=10', {
-        immediate: true,
-    });
+    // ─── Fallback data for missing endpoints ──────────────────
+    const trends = [];        // no trends fetch
+    const activities = [];    // no activity fetch
+    const notifications = []; // no notifications fetch
 
-    const { data: notificationsData } = useFetch('/dashboard/notifications?unreadOnly=true', {
-        immediate: true,
-    });
+    // ─── Socket event: new event detection ────────────────────
+    const handleNewEvent = useCallback(
+        (data) => {
+            if (!data?.distance) return;
 
-    // ─── Popup cooldown (5 seconds) ──────────────────────────────
-    const [lastPopupTime, setLastPopupTime] = useState(0);
-    const POPUP_COOLDOWN = 5000;
-
-    // ─── Socket event listener for AI detections ──────────────────
-    useEffect(() => {
-        if (!socket) {
-            console.log('Socket not available – event listener skipped');
-            return;
-        }
-
-        const handleNewEvent = (data) => {
-            console.log('📢 New event received:', data);
-            if (data?.distance) {
-                // 1. If the backend sent per‑language announcements, play all
-                if (data.announcement && typeof data.announcement === 'object') {
-                    const languages = Object.keys(data.announcement);
-                    if (languages.length > 0) {
-                        speakMultipleLanguages(data.distance, languages);
-                    } else {
-                        speakMultipleLanguages(data.distance, ['en', 'hi', 'pa', 'ta', 'ur', 'kht']);
-                    }
+            // Speak announcements
+            if (data.announcement && typeof data.announcement === 'object') {
+                const languages = Object.keys(data.announcement);
+                if (languages.length > 0) {
+                    speakMultipleLanguages(data.distance, languages);
                 } else {
-                    // Fallback: speak only the user’s selected language
-                    speakAnnouncement(data.distance, lang);
+                    speakMultipleLanguages(data.distance, ['en', 'hi', 'pa', 'ta', 'ur']);
                 }
-
-                // 2. Show popup notification (with own cooldown)
-                const now = Date.now();
-                if (now - lastPopupTime >= POPUP_COOLDOWN) {
-                    const text = getAnnouncementText(data.distance, lang);
-                    const zoneName = data.zoneName || 'Unknown zone';
-
-                    toast.custom(
-                        (t) => (
-                            <div className="bg-gray-900 border border-yellow-500/50 rounded-lg p-4 max-w-md shadow-2xl">
-                                <div className="flex items-start gap-3">
-                                    <div className="w-10 h-10 rounded-full bg-yellow-500/20 flex items-center justify-center flex-shrink-0">
-                                        <AlertTriangle className="w-5 h-5 text-yellow-400" />
-                                    </div>
-                                    <div className="flex-1">
-                                        <p className="text-white text-sm font-medium">⚠️ Litter Detected</p>
-                                        <p className="text-gray-300 text-sm mt-1">{text}</p>
-                                        <p className="text-xs text-gray-500 mt-1">📍 Zone: {zoneName}</p>
-                                    </div>
-                                    <button
-                                        onClick={() => toast.dismiss(t.id)}
-                                        className="text-gray-400 hover:text-white transition"
-                                    >
-                                        <X className="w-4 h-4" />
-                                    </button>
-                                </div>
-                            </div>
-                        ),
-                        { duration: 8000, position: 'top-right' }
-                    );
-
-                    setLastPopupTime(now);
-                } else {
-                    console.log('Popup cooldown active, skipping popup');
-                }
-
-                // Refresh stats
-                refetchStats();
-                refetchRealtime();
+            } else {
+                speakAnnouncement(data.distance, lang);
             }
-        };
 
+            // Popup notification (with cooldown)
+            const now = Date.now();
+            if (now - lastPopupTime.current >= POPUP_COOLDOWN) {
+                const text = getAnnouncementText(data.distance, lang);
+                const zoneName = data.zoneName || 'Unknown zone';
+                toast.custom(
+                    (t) => (
+                        <div className="bg-gray-900 border border-yellow-500/50 rounded-lg p-4 max-w-md shadow-2xl">
+                            <div className="flex items-start gap-3">
+                                <div className="w-10 h-10 rounded-full bg-yellow-500/20 flex items-center justify-center flex-shrink-0">
+                                    <AlertTriangle className="w-5 h-5 text-yellow-400" />
+                                </div>
+                                <div className="flex-1">
+                                    <p className="text-white text-sm font-medium">⚠️ Litter Detected</p>
+                                    <p className="text-gray-300 text-sm mt-1">{text}</p>
+                                    <p className="text-xs text-gray-500 mt-1">📍 Zone: {zoneName}</p>
+                                </div>
+                                <button
+                                    onClick={() => toast.dismiss(t.id)}
+                                    className="text-gray-400 hover:text-white transition"
+                                >
+                                    <X className="w-4 h-4" />
+                                </button>
+                            </div>
+                        </div>
+                    ),
+                    { duration: 8000, position: 'top-right' }
+                );
+                lastPopupTime.current = now;
+            }
+
+            // Refresh stats & realtime
+            refetchStats();
+            refetchRealtime();
+        },
+        [lang, refetchStats, refetchRealtime]
+    );
+
+    useEffect(() => {
+        if (!socket) return;
         socket.on('event:new', handleNewEvent);
-
         return () => {
             socket.off('event:new', handleNewEvent);
         };
-    }, [socket, lang, refetchStats, refetchRealtime, lastPopupTime]);
+    }, [socket, handleNewEvent]);
 
-    // ─── Language change handler ──────────────────────────────────
+    // ─── Language change handler ──────────────────────────────
     const handleLangChange = (e) => {
         const newLang = e.target.value;
         setLang(newLang);
         localStorage.setItem('speakerLang', newLang);
     };
 
-    // ─── Extract data ──────────────────────────────────────────────
-    const stats = useMemo(() => statsData?.data || statsData || {}, [statsData]);
-    const realtime = useMemo(() => realtimeData?.data || realtimeData || {}, [realtimeData]);
-    const trends = useMemo(() => trendsData?.data || trendsData || [], [trendsData]);
-    const activities = useMemo(() => activityData?.data || activityData || [], [activityData]);
-    const notifications = useMemo(() => notificationsData?.data || notificationsData || [], [notificationsData]);
+    // ─── Test speaker ──────────────────────────────────────────
+    const handleTestSpeaker = () => {
+        const testDistance = 25;
+        speakAnnouncement(testDistance, lang);
+        const text = getAnnouncementText(testDistance, lang);
+        toast.success(`🔊 Test: ${text}`, { duration: 4000 });
+    };
 
-    // ─── Loading ──────────────────────────────────────────────────
+    // ─── Loading & Error states ──────────────────────────────
     if (authLoading || statsLoading) {
         return (
             <div className="flex justify-center items-center h-64">
@@ -185,27 +214,21 @@ const Dashboard = () => {
         );
     }
 
+    // ─── Render ──────────────────────────────────────────────────
     return (
         <div className="p-4 md:p-6">
-            {/* ─── Header with Language Switcher ───────────────────────── */}
+            {/* ─── Header ──────────────────────────────────────────── */}
             <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
                 <h1 className="text-2xl md:text-3xl font-bold text-white">Dashboard</h1>
                 <div className="flex items-center gap-3 flex-wrap">
-                    {/* ─── Test Speaker ─────────────────────────────────────── */}
                     <button
-                        onClick={() => {
-                            const testDistance = 25;
-                            speakAnnouncement(testDistance, lang);
-                            const text = getAnnouncementText(testDistance, lang);
-                            toast.success(`🔊 Test: ${text}`, { duration: 4000 });
-                        }}
+                        onClick={handleTestSpeaker}
                         className="flex items-center gap-1 px-3 py-1.5 bg-purple-500/20 text-purple-400 rounded-lg hover:bg-purple-500/30 transition-colors text-sm"
                         title="Test speaker & popup"
                     >
                         <Speaker className="w-4 h-4" /> Test
                     </button>
 
-                    {/* ─── Language Switcher ───────────────────────────────── */}
                     <div className="flex items-center gap-2">
                         <Speaker className="w-4 h-4 text-gray-400" />
                         <select
@@ -228,14 +251,10 @@ const Dashboard = () => {
                         </select>
                     </div>
 
-                    {/* ─── Socket status ───────────────────────────────────── */}
-                    <div className="flex items-center gap-2">
-                        <span className="text-sm text-gray-400">
-                            {isConnected ? '🟢 Live' : '🔴 Disconnected'}
-                        </span>
-                    </div>
+                    <span className="text-sm text-gray-400">
+                        {isConnected ? '🟢 Live' : '🔴 Disconnected'}
+                    </span>
 
-                    {/* ─── Refresh button ──────────────────────────────────── */}
                     <button
                         onClick={() => { refetchStats(); refetchRealtime(); }}
                         className="p-2 rounded-lg bg-gray-800/50 hover:bg-gray-700/50 text-gray-400 hover:text-white transition-colors"
@@ -246,7 +265,7 @@ const Dashboard = () => {
                 </div>
             </div>
 
-            {/* ─── Stats Grid ────────────────────────────────────────── */}
+            {/* ─── Stats Grid ────────────────────────────────────── */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 <StatCard
                     title="Total Cameras"
@@ -320,7 +339,7 @@ const Dashboard = () => {
                 />
             </div>
 
-            {/* ─── Real-time Stats ────────────────────────────────────── */}
+            {/* ─── Real-time Stats ────────────────────────────────── */}
             {realtime && Object.keys(realtime).length > 0 && (
                 <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4 bg-gray-800/30 rounded-xl p-4 border border-gray-700">
                     <div>
@@ -342,75 +361,25 @@ const Dashboard = () => {
                 </div>
             )}
 
-            {/* ─── Trends Chart ────────────────────────────────── */}
+            {/* ─── Trends (placeholder) ───────────────────────────── */}
             <div className="mt-6 bg-gray-800/30 rounded-xl p-4 border border-gray-700">
                 <h3 className="text-white font-semibold mb-3">Trends (Last 7 Days)</h3>
-                <div className="flex items-end gap-2 h-32">
-                    {trends.length > 0 ? (
-                        trends.map((item, idx) => (
-                            <div key={idx} className="flex-1 flex flex-col items-center">
-                                <div
-                                    className="w-full bg-primary/50 rounded-t"
-                                    style={{ height: `${(item.events / Math.max(...trends.map(t => t.events))) * 100}%` }}
-                                />
-                                <span className="text-xs text-gray-400 mt-1">{item.time}</span>
-                            </div>
-                        ))
-                    ) : (
-                        <p className="text-gray-400 text-sm">No trend data available.</p>
-                    )}
-                </div>
+                <p className="text-gray-400 text-sm">Trend data not available yet. Please implement the backend endpoint.</p>
             </div>
 
-            {/* ─── Recent Activity & Notifications ────────────────────── */}
+            {/* ─── Recent Activity & Notifications (placeholders) ── */}
             <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="glass-card p-4 border border-white/10 rounded-xl">
                     <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
                         <FileText className="w-4 h-4" /> Recent Activity
                     </h3>
-                    {activities.length === 0 ? (
-                        <p className="text-gray-400 text-sm">No recent activity.</p>
-                    ) : (
-                        <div className="space-y-2 max-h-60 overflow-y-auto">
-                            {activities.slice(0, 5).map((act, idx) => (
-                                <div key={idx} className="flex items-center gap-2 text-sm border-b border-gray-800/50 pb-2">
-                                    <span className="text-gray-400">{act.action || 'Unknown'}</span>
-                                    <span className="text-gray-500">•</span>
-                                    <span className="text-gray-300">{act.resource || 'Resource'}</span>
-                                    <span className="ml-auto text-xs text-gray-500">
-                                        {act.timestamp ? new Date(act.timestamp).toLocaleTimeString() : 'N/A'}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                    )}
+                    <p className="text-gray-400 text-sm">No recent activity (endpoint missing).</p>
                 </div>
                 <div className="glass-card p-4 border border-white/10 rounded-xl">
                     <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
                         <Bell className="w-4 h-4" /> Notifications
-                        {notifications.length > 0 && (
-                            <span className="ml-auto text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full">
-                                {notifications.length} unread
-                            </span>
-                        )}
                     </h3>
-                    {notifications.length === 0 ? (
-                        <p className="text-gray-400 text-sm">No unread notifications.</p>
-                    ) : (
-                        <div className="space-y-2 max-h-60 overflow-y-auto">
-                            {notifications.map((notif) => (
-                                <div key={notif._id} className="flex items-start gap-2 text-sm border-b border-gray-800/50 pb-2">
-                                    <span className="text-yellow-400 mt-0.5">🔔</span>
-                                    <div>
-                                        <p className="text-gray-300">{notif.message || 'Notification'}</p>
-                                        <p className="text-xs text-gray-500">
-                                            {notif.createdAt ? new Date(notif.createdAt).toLocaleString() : 'N/A'}
-                                        </p>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
+                    <p className="text-gray-400 text-sm">No notifications (endpoint missing).</p>
                 </div>
             </div>
         </div>

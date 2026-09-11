@@ -2,9 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, Mail, Lock, LogIn, AlertCircle, Leaf, Cpu, Users } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { toast } from 'react-hot-toast';
+import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import api from '../services/api';
 
 const Login = () => {
     const [email, setEmail] = useState('');
@@ -22,14 +21,11 @@ const Login = () => {
         e.preventDefault();
         setError('');
         setLoading(true);
+
         try {
-            const res = await api.post('/auth/login', { email, password });
-            const token = res.token || res.data?.token;
-            const user = res.user || res.data?.user;
-            if (!token) throw new Error('No token received');
-            login(token, user);
+            await login(email, password);
             toast.success('Welcome back! 🎉');
-            navigate('/dashboard');
+            navigate('/dashboard', { replace: true });
         } catch (err) {
             const msg = err.response?.data?.message || err.message || 'Login failed';
             setError(msg);
@@ -122,7 +118,7 @@ const Login = () => {
                                             value={email}
                                             onChange={(e) => setEmail(e.target.value)}
                                             placeholder="you@example.com"
-                                            className="input-field pl-10"
+                                            className="w-full pl-10 pr-4 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary"
                                             required
                                         />
                                     </div>
@@ -141,7 +137,7 @@ const Login = () => {
                                             value={password}
                                             onChange={(e) => setPassword(e.target.value)}
                                             placeholder="Enter your password"
-                                            className="input-field pl-10 pr-12"
+                                            className="w-full pl-10 pr-12 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary"
                                             required
                                         />
                                         <button
@@ -156,7 +152,7 @@ const Login = () => {
                                 <button
                                     type="submit"
                                     disabled={loading}
-                                    className="btn-primary w-full"
+                                    className="w-full py-2.5 bg-primary hover:bg-primary/90 text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
                                 >
                                     {loading ? (
                                         <>

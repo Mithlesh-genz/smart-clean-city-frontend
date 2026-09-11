@@ -33,6 +33,7 @@ const NotFound = () => (
 );
 
 // ─── Protected Route (authentication only) ────────────────────
+// In AppRoutes.jsx or wherever
 const ProtectedRoute = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
   const location = useLocation();
